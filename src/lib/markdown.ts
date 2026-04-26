@@ -1,0 +1,119 @@
+import type { Highlighter } from 'shiki';
+
+let processorPromise: Promise<{ process: (text: string) => Promise<{ toString: () => string }> }> | null = null;
+let highlighterPromise: Promise<Highlighter> | null = null;
+
+function getProcessor() {
+	if (!processorPromise) {
+		processorPromise = Promise.all([
+			import('unified'),
+			import('remark-parse'),
+			import('remark-gfm'),
+			import('remark-math'),
+			import('remark-rehype'),
+			import('rehype-raw'),
+			import('rehype-katex'),
+			import('rehype-stringify'),
+		]).then(([unified, remarkParse, remarkGfm, remarkMath, remarkRehype, rehypeRaw, rehypeKatex, rehypeStringify]) =>
+			unified.unified()
+				.use(remarkParse.default)
+				.use(remarkGfm.default)
+				.use(remarkMath.default)
+				.use(remarkRehype.default, { allowDangerousHtml: true })
+				.use(rehypeRaw.default)
+				.use(rehypeKatex.default)
+				.use(rehypeStringify.default)
+		);
+	}
+	return processorPromise;
+}
+
+function getHighlighter() {
+	if (!highlighterPromise) {
+		highlighterPromise = import('shiki').then(({ createHighlighter }) =>
+			createHighlighter({
+				themes: ['github-dark', 'github-light'],
+				langs: [
+					'javascript', 'typescript', 'python', 'bash', 'shell',
+					'json', 'html', 'css', 'sql', 'rust', 'go', 'java',
+					'c', 'cpp', 'ruby', 'php', 'swift', 'kotlin', 'yaml',
+					'markdown', 'xml', 'dockerfile', 'plaintext',
+				],
+			})
+		);
+	}
+	return highlighterPromise;
+}
+
+const AUTO_COLLAPSE_THRESHOLD = 10;
+
+export async function renderMarkdown(text: string): Promise<string> {
+	const [processor, highlighter] = await Promise.all([getProcessor(), getHighlighter()]);
+
+	const file = await processor.process(text);
+	let html = String(file);
+
+	// Replace language-tagged code blocks
+	const codeBlockRegex = /<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g;
+	html = html.replace(codeBlockRegex, (_match, lang: string, code: string) => {
+		const decoded = decodeHtmlEntities(code);
+		const loadedLangs = highlighter.getLoadedLanguages();
+		const language = loadedLangs.includes(lang) ? lang : 'plaintext';
+		const highlighted = highlighter.codeToHtml(decoded, {
+			lang: language,
+			themes: { light: 'github-light', dark: 'github-dark' },
+		});
+		return wrapCodeBlock(highlighted, lang, decoded);
+	});
+
+	// Replace plain code blocks (no language)
+	const plainCodeBlockRegex = /<pre><code>([\s\S]*?)<\/code><\/pre>/g;
+	html = html.replace(plainCodeBlockRegex, (_match, code: string) => {
+		const decoded = decodeHtmlEntities(code);
+		const highlighted = highlighter.codeToHtml(decoded, {
+			lang: 'plaintext',
+			themes: { light: 'github-light', dark: 'github-dark' },
+		});
+		return wrapCodeBlock(highlighted, 'code', decoded);
+	});
+
+	// Wrap tables with a copy container
+	html = html.replace(/<table>([\s\S]*?)<\/table>/g, (_match, inner: string) => {
+		const tableHtml = `<table>${inner}</table>`;
+		return `<div class="md-table-wrap"><div class="md-table-header"><span class="md-table-label">Table</span><button class="md-table-copy" data-table>Copy</button></div><div class="md-table-body">${tableHtml}</div></div>`;
+	});
+
+	return html;
+}
+
+function wrapCodeBlock(highlighted: string, lang: string, rawCode: string): string {
+	const lineCount = rawCode.split('\n').length;
+	const collapsed = lineCount > AUTO_COLLAPSE_THRESHOLD;
+	const escapedCode = rawCode
+		.replace(/&/g, '&amp;')
+		.replace(/"/g, '&quot;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;');
+
+	return `<div class="md-code-wrap${collapsed ? ' md-collapsed' : ''}">
+<div class="md-code-header">
+<span class="md-code-lang">${lang}</span>
+<div class="md-code-actions">
+<button class="md-code-toggle" data-toggle>${collapsed ? '&#9654; Expand' : '&#9660; Collapse'}</button>
+<button class="md-code-copy" data-copy data-code="${escapedCode}">Copy</button>
+</div>
+</div>
+<div class="md-code-body">${highlighted}</div>
+</div>`;
+}
+
+function decodeHtmlEntities(text: string): string {
+	return text
+		.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+		.replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'");
+}
