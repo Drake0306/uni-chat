@@ -18,6 +18,7 @@
 	import * as ContextMenu from '$lib/components/ui/context-menu/index.js';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Command from '$lib/components/ui/command/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
@@ -26,6 +27,7 @@
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
+	import { findModel, getDefaultModel } from '$lib/config/models.js';
 	import GoogleIcon from '$lib/components/google-icon.svelte';
 
 	const isMac = browser && navigator.platform.toUpperCase().includes('MAC');
@@ -75,6 +77,25 @@
 		if (wasActive) goto('/', { replaceState: true });
 	}
 
+	// Confirmation flow for permanent delete. Context-menu / future buttons set
+	// chatPendingDelete; the dialog (rendered at the bottom of the file) is
+	// open whenever this is non-null. Confirm runs the actual delete; cancel
+	// (or escape / click-outside) just clears the state.
+	let chatPendingDelete = $state<Chat | null>(null);
+	let deleting = $state(false);
+
+	async function confirmDelete() {
+		if (!chatPendingDelete || deleting) return;
+		const chat = chatPendingDelete;
+		deleting = true;
+		try {
+			await deleteChat(chat.id);
+			chatPendingDelete = null;
+		} finally {
+			deleting = false;
+		}
+	}
+
 	// Context-menu actions. Only "Permanently delete" is wired today; the rest
 	// are stubs for now — the user will spec the implementations later.
 	function handlePin(chat: Chat) {
@@ -87,11 +108,159 @@
 	function handleOpenInNewTab(chat: Chat) {
 		window.open(`/chat/${chat.id}`, '_blank', 'noopener');
 	}
+	// Rename mode: when renamingChatId matches a chat, that row renders an
+	// input pre-filled with the current title (auto-focused and selected).
+	// Enter commits to DB via chatStore.updateChatTitle; Escape cancels;
+	// blur commits (so clicking elsewhere saves rather than dropping the edit).
+	let renamingChatId = $state<string | null>(null);
+	let renameValue = $state('');
+
 	function handleRename(chat: Chat) {
-		console.log('[sidebar] Rename (not yet implemented):', chat.id);
+		renameValue = chat.title;
+		renamingChatId = chat.id;
 	}
-	function handleRegenerateTitle(chat: Chat) {
-		console.log('[sidebar] Regenerate title (not yet implemented):', chat.id);
+
+	async function commitRename(chatId: string) {
+		// Guard against double-fire: Enter or Escape already cleared this, but
+		// blur fires afterwards and would trigger commitRename again.
+		if (renamingChatId !== chatId) return;
+		const newTitle = renameValue.trim();
+		renamingChatId = null;
+		renameValue = '';
+		if (newTitle) {
+			await chatStore.updateChatTitle(chatId, newTitle);
+		}
+	}
+
+	function cancelRename() {
+		renamingChatId = null;
+		renameValue = '';
+	}
+
+	function autofocusSelect(node: HTMLInputElement) {
+		node.focus();
+		node.select();
+	}
+	// Track in-flight title regenerations so a double-click doesn't fire twice.
+	let regeneratingTitleIds = $state<Set<string>>(new Set());
+
+	// Read the user's currently-selected model from localStorage. Same key as
+	// chat-view.svelte writes to. Falls back to default if missing/invalid.
+	function readSelectedModel(): { companyId: string; modelId: string; modelName: string } {
+		if (typeof window === 'undefined') return getDefaultModel();
+		try {
+			const raw = localStorage.getItem('unichat_selected_model');
+			if (raw) {
+				const parsed = JSON.parse(raw) as {
+					companyId?: string;
+					modelId?: string;
+				};
+				if (parsed?.companyId && parsed?.modelId) {
+					const found = findModel(parsed.companyId, parsed.modelId);
+					if (found && found.enabled) {
+						return {
+							companyId: parsed.companyId,
+							modelId: parsed.modelId,
+							modelName: found.name,
+						};
+					}
+				}
+			}
+		} catch {
+			// fall through to default
+		}
+		return getDefaultModel();
+	}
+
+	async function handleRegenerateTitle(chat: Chat) {
+		if (regeneratingTitleIds.has(chat.id)) return;
+		regeneratingTitleIds = new Set([...regeneratingTitleIds, chat.id]);
+		try {
+			const allMessages = await chatStore.fetchChatMessages(chat.id);
+			const usable = allMessages.filter((m) => !m.isError && m.content);
+			if (usable.length === 0) return;
+
+			// Sample: first 4 + last 2 messages (so titles stay grounded in the
+			// opening topic but pick up later focus shifts on long chats).
+			// Each message capped at 500 chars to keep token usage bounded.
+			const head = usable.slice(0, 4);
+			const tail = usable.length > 6 ? usable.slice(-2) : [];
+			const sample = [...head, ...tail];
+			const conversationText = sample
+				.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 500)}`)
+				.join('\n\n');
+
+			// Single user message — works across providers that don't honor a
+			// `system` role uniformly (Gemini, etc.).
+			const prompt =
+				`Generate a short, concise title (4-8 words, no quotes, no trailing punctuation) ` +
+				`that summarizes what this conversation is about. Respond with ONLY the title text.\n\n` +
+				`Conversation:\n${conversationText}`;
+
+			const model = readSelectedModel();
+			const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+			const token = authStore.getAccessToken();
+			if (token) headers['Authorization'] = `Bearer ${token}`;
+
+			const response = await fetch('/api/chat', {
+				method: 'POST',
+				headers,
+				body: JSON.stringify({
+					companyId: model.companyId,
+					modelId: model.modelId,
+					messages: [{ role: 'user', content: prompt }],
+					// No chatId/messageId — server's tee() guard requires both, so
+					// the title-generation prompt is NOT saved to the chat's history.
+				}),
+			});
+			if (!response.ok) {
+				console.error('[sidebar] regenerateTitle: API error', response.status);
+				return;
+			}
+
+			const reader = response.body?.getReader();
+			if (!reader) return;
+			const decoder = new TextDecoder();
+			let buffer = '';
+			let title = '';
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() ?? '';
+				for (const line of lines) {
+					if (!line.startsWith('data: ')) continue;
+					const data = line.slice(6).trim();
+					if (data === '[DONE]') break;
+					try {
+						const parsed = JSON.parse(data);
+						const delta = parsed.choices?.[0]?.delta;
+						if (delta?.content) title += delta.content;
+					} catch {
+						// skip unparseable chunks
+					}
+				}
+			}
+
+			// LLMs love to wrap titles in quotes and trail punctuation. Clean.
+			title = title
+				.trim()
+				.replace(/^["'`]+|["'`]+$/g, '')
+				.replace(/[.!?]+$/g, '')
+				.trim()
+				.slice(0, 80);
+
+			if (title) {
+				await chatStore.updateChatTitle(chat.id, title);
+			}
+		} catch (err) {
+			console.error('[sidebar] regenerateTitle failed:', err);
+		} finally {
+			const next = new Set(regeneratingTitleIds);
+			next.delete(chat.id);
+			regeneratingTitleIds = next;
+		}
 	}
 
 	// Two independent lists from the store. The store handles the today/older
@@ -163,6 +332,25 @@
 </script>
 
 {#snippet chatRow(chat: Chat)}
+	{#if renamingChatId === chat.id}
+		<Sidebar.SidebarMenuItem>
+			<input
+				use:autofocusSelect
+				bind:value={renameValue}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						commitRename(chat.id);
+					} else if (e.key === 'Escape') {
+						e.preventDefault();
+						cancelRename();
+					}
+				}}
+				onblur={() => commitRename(chat.id)}
+				class="block h-9 w-full rounded-md bg-background px-5 text-[15px] text-foreground outline-none ring-2 ring-sidebar-ring"
+			/>
+		</Sidebar.SidebarMenuItem>
+	{:else}
 	{@const isActive = page.url.pathname === `/chat/${chat.id}`}
 	<ContextMenu.Root>
 		<ContextMenu.Trigger>
@@ -174,7 +362,13 @@
 					>
 						{#snippet child({ props: btnProps })}
 							<a {...btnProps} href="/chat/{chat.id}">
-								<span>{chat.title}</span>
+								<span
+									class="transition-[filter,opacity] duration-500 ease-out"
+									class:blur-md={regeneratingTitleIds.has(chat.id)}
+									class:opacity-60={regeneratingTitleIds.has(chat.id)}
+								>
+									{chat.title}
+								</span>
 							</a>
 						{/snippet}
 					</Sidebar.SidebarMenuButton>
@@ -221,12 +415,13 @@
 				Regenerate title
 			</ContextMenu.Item>
 			<ContextMenu.Separator />
-			<ContextMenu.Item variant="destructive" onSelect={() => deleteChat(chat.id)}>
+			<ContextMenu.Item variant="destructive" onSelect={() => (chatPendingDelete = chat)}>
 				<TrashIcon class="mr-2 size-4" />
 				Permanently delete
 			</ContextMenu.Item>
 		</ContextMenu.Content>
 	</ContextMenu.Root>
+	{/if}
 {/snippet}
 
 <Sidebar.Sidebar collapsible="offcanvas">
@@ -467,3 +662,29 @@
 		{/if}
 	</Command.List>
 </Command.Dialog>
+
+<!-- Confirm permanent delete -->
+<Dialog.Root
+	open={chatPendingDelete !== null}
+	onOpenChange={(o) => {
+		if (!o && !deleting) chatPendingDelete = null;
+	}}
+>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Delete this chat?</Dialog.Title>
+			<Dialog.Description>
+				<span class="font-medium text-foreground">"{chatPendingDelete?.title ?? ''}"</span>
+				and all its messages will be permanently deleted. This cannot be undone.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="ghost" onclick={() => (chatPendingDelete = null)} disabled={deleting}>
+				Cancel
+			</Button>
+			<Button variant="destructive" onclick={confirmDelete} disabled={deleting}>
+				{deleting ? 'Deleting…' : 'Delete'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

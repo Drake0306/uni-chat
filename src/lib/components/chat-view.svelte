@@ -24,6 +24,7 @@
 	import { untrack } from 'svelte';
 	import { useSidebar } from '$lib/components/ui/sidebar/index.js';
 	import * as Popover from '$lib/components/ui/popover/index.js';
+	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import ModelSelector from '$lib/components/model-selector.svelte';
@@ -39,6 +40,12 @@
 
 	$effect(() => {
 		const id = chatId;
+		// Track authStore.loading so the effect re-runs when auth resolves.
+		// On fresh page loads (refresh, new tab, deeplink to /chat/<id>),
+		// Supabase's onAuthStateChange fires AFTER this component mounts; if
+		// we call loadChat() before that, useSupabase() is false, the chat
+		// isn't found, and the .then() below redirects to /.
+		const authLoading = authStore.loading;
 		// Read activeChat without subscribing — otherwise the effect re-runs
 		// when handleSend's createChat() sets activeChat, which would race with
 		// the goto() and clobber the in-flight stream's messages array.
@@ -47,6 +54,7 @@
 				if (chatStore.activeChat) chatStore.clearActive();
 				return;
 			}
+			if (authLoading) return; // wait for auth before fetching the chat
 			if (chatStore.activeChat?.id === id) return; // already loaded
 			chatStore.loadChat(id).then(() => {
 				if (chatStore.activeChat?.id !== id) {
@@ -64,6 +72,16 @@
 	let theme = $state<Theme>('auto');
 	let tempChatEnabled = $state(false);
 
+	// Switching temp mode in either direction resets the in-memory chat: temp
+	// messages are dropped, any active saved chat is cleared, and the user
+	// lands on / so the empty-state heading reflects the new mode. This avoids
+	// the edge case of mixing temp messages into a saved chat or vice versa.
+	function toggleTempChat() {
+		tempChatEnabled = !tempChatEnabled;
+		chatStore.clearActive();
+		goto('/', { replaceState: true });
+	}
+
 	function applyTheme(t: Theme) {
 		theme = t;
 		if (t === 'dark') {
@@ -80,7 +98,41 @@
 	const messages = $derived(chatStore.messages);
 	let input = $state('');
 	let loading = $state(false);
-	let selectedModel = $state(getDefaultModel());
+
+	// Persist the user's model choice across "New Chat" / page reloads via
+	// localStorage. Validates on load (model may have been disabled or removed
+	// from config since the last visit) and falls back to the default.
+	const SELECTED_MODEL_KEY = 'unichat_selected_model';
+	function loadStoredModel(): { companyId: string; modelId: string; modelName: string } {
+		if (typeof window === 'undefined') return getDefaultModel();
+		try {
+			const raw = localStorage.getItem(SELECTED_MODEL_KEY);
+			if (!raw) return getDefaultModel();
+			const stored = JSON.parse(raw) as {
+				companyId?: string;
+				modelId?: string;
+				modelName?: string;
+			};
+			if (!stored?.companyId || !stored?.modelId) return getDefaultModel();
+			const found = findModel(stored.companyId, stored.modelId);
+			if (!found || !found.enabled) return getDefaultModel();
+			return { companyId: stored.companyId, modelId: stored.modelId, modelName: found.name };
+		} catch {
+			return getDefaultModel();
+		}
+	}
+	let selectedModel = $state(loadStoredModel());
+
+	$effect(() => {
+		// Save whenever the user picks a different model.
+		if (typeof window === 'undefined') return;
+		try {
+			localStorage.setItem(SELECTED_MODEL_KEY, JSON.stringify(selectedModel));
+		} catch {
+			// ignore quota / privacy-mode errors
+		}
+	});
+
 	let messagesEnd: HTMLDivElement | undefined = $state();
 
 	// Poll for server-side response completion: if the last message is an empty
@@ -175,16 +227,22 @@
 		const text = (directText ?? input).trim();
 		if (!text || loading) return;
 
-		// Create chat on first message
-		let currentChatId = chatStore.activeChat?.id;
+		// Temp mode: skip every persistence step. Messages live only in
+		// chatStore.messages (in-memory), no chat row created, no sidebar
+		// entry, no DB write, no localStorage. Refresh clears everything.
+		// Create chat on first message (skipped in temp mode).
+		let currentChatId: string | undefined;
 		let isNewChat = false;
-		if (!currentChatId) {
-			try {
-				currentChatId = await chatStore.createChat(selectedModel.modelId, selectedModel.companyId);
-				isNewChat = true;
-			} catch (err) {
-				console.error('Failed to create chat:', err);
-				return;
+		if (!tempChatEnabled) {
+			currentChatId = chatStore.activeChat?.id;
+			if (!currentChatId) {
+				try {
+					currentChatId = await chatStore.createChat(selectedModel.modelId, selectedModel.companyId);
+					isNewChat = true;
+				} catch (err) {
+					console.error('Failed to create chat:', err);
+					return;
+				}
 			}
 		}
 
@@ -205,17 +263,19 @@
 		});
 		const assistantMsg = chatStore.lastMessage()!;
 
-		if (isNewChat) {
+		if (isNewChat && currentChatId) {
 			goto(`/chat/${currentChatId}`, { replaceState: true, noScroll: true });
 		}
 
-		// Persist user message (fire-and-forget)
-		chatStore.addMessage(currentChatId, userMsg);
+		// Persist user message (fire-and-forget). Skipped in temp mode.
+		if (!tempChatEnabled && currentChatId) {
+			chatStore.addMessage(currentChatId, userMsg);
 
-		// Auto-title from first user message
-		if (messages.filter((m) => m.role === 'user').length === 1) {
-			const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
-			chatStore.updateChatTitle(currentChatId, title);
+			// Auto-title from first user message
+			if (messages.filter((m) => m.role === 'user').length === 1) {
+				const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
+				chatStore.updateChatTitle(currentChatId, title);
+			}
 		}
 
 		chatStore.setStreaming(true);
@@ -234,7 +294,11 @@
 						.filter((m) => m.id !== assistantMsg.id && !m.isError)
 						.map((m) => ({ role: m.role, content: m.content })),
 					...(thinkingEnabled && { thinking: true }),
-					...(authStore.isAuthenticated && { chatId: currentChatId, messageId: assistantMsg.id }),
+					// In temp mode we omit chatId/messageId so the server-side
+					// tee in /api/chat skips the DB save (its guard requires both).
+					...(!tempChatEnabled &&
+						authStore.isAuthenticated &&
+						currentChatId && { chatId: currentChatId, messageId: assistantMsg.id }),
 				}),
 			});
 
@@ -299,8 +363,13 @@
 			loading = false;
 			chatStore.setStreaming(false);
 			// Server handles assistant message persistence for authenticated users (via tee).
-			// Only save client-side for guests.
-			if (currentChatId && assistantMsg.content && !authStore.isAuthenticated) {
+			// Only save client-side for guests. Skipped entirely in temp mode.
+			if (
+				!tempChatEnabled &&
+				currentChatId &&
+				assistantMsg.content &&
+				!authStore.isAuthenticated
+			) {
 				chatStore.addMessage(currentChatId, {
 					id: assistantMsg.id,
 					role: assistantMsg.role,
@@ -355,16 +424,28 @@
 	<div class="floating-toolbar-right absolute right-3 top-3 z-20">
 		<div class="flex items-center gap-0.5 rounded-xl bg-sidebar p-1 shadow-md ring-1 ring-sidebar-border">
 			<!-- Temporary chat toggle -->
-			<button
-				class="flex size-9 items-center justify-center rounded-lg transition-all active:scale-[0.97]
-					{tempChatEnabled
-						? 'bg-primary/15 text-primary'
-						: 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}"
-				onclick={() => tempChatEnabled = !tempChatEnabled}
-				title="Temporary chat"
-			>
-				<MessageSquareDashedIcon class="size-4" />
-			</button>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="flex size-9 items-center justify-center rounded-lg transition-all active:scale-[0.97]
+								{tempChatEnabled
+									? 'bg-primary/15 text-primary'
+									: 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}"
+							onclick={toggleTempChat}
+							aria-label="Toggle temporary chat"
+							aria-pressed={tempChatEnabled}
+						>
+							<MessageSquareDashedIcon class="size-4" />
+						</button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content side="bottom" sideOffset={6}>
+					<p class="font-semibold">Temporary chat</p>
+					<p class="text-xs text-muted-foreground">Won't be saved. Refresh clears it.</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
 
 			<!-- Settings popover -->
 			<Popover.Root>
@@ -421,7 +502,17 @@
 		{#if messages.length === 0}
 			<div class="flex h-full items-center justify-center pb-32">
 				<div class="w-full max-w-2xl px-4">
-					<h2 class="text-3xl font-semibold">How can I help you?</h2>
+					{#if tempChatEnabled}
+						<h2 class="flex items-center gap-2.5 text-3xl font-semibold">
+							<MessageSquareDashedIcon class="size-7 text-muted-foreground" />
+							Temporary chat
+						</h2>
+						<p class="mt-2 text-sm text-muted-foreground">
+							This conversation won't be saved anywhere. Refreshing the page will clear it.
+						</p>
+					{:else}
+						<h2 class="text-3xl font-semibold">How can I help you?</h2>
+					{/if}
 
 					<!-- Category tabs -->
 					<div class="mt-6 flex flex-wrap items-center gap-1.5">
@@ -462,12 +553,26 @@
 				</div>
 			</div>
 		{:else}
-			<div class="mx-auto max-w-3xl space-y-6 p-4 pb-8">
+			<div class="mx-auto max-w-3xl space-y-6 px-4 pt-20 pb-8">
 				{#each messages as message}
 					{#if message.role === 'user'}
-						<div class="flex justify-end">
+						<div class="group flex flex-col items-end">
 							<div class="max-w-[85%] rounded-2xl bg-muted/60 px-4 py-2.5">
 								<p class="whitespace-pre-wrap text-base">{message.content}</p>
+							</div>
+							<div class="mt-2 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+								<button
+									class="msg-action flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
+									onclick={() => copyMessage(message)}
+								>
+									{#if copiedId === message.id}
+										<CheckIcon class="size-4" />
+										<span>Copied</span>
+									{:else}
+										<CopyIcon class="size-4" />
+										<span>Copy</span>
+									{/if}
+								</button>
 							</div>
 						</div>
 					{:else}

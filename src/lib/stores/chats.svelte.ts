@@ -286,22 +286,26 @@ export const chatStore = {
 		todayChats = [chat, ...todayChats];
 		activeChat = chat;
 
-		// Persist in the background. Don't await — caller uses the id right away.
+		// AWAIT the chat insert. Subsequent calls (addMessage on the user msg,
+		// updateChatTitle, the server-side tee save) target this chat by id;
+		// if we don't wait, they race the chat insert and silently fail
+		// (FK violation on messages, no-op UPDATE for title).
 		if (useSupabase()) {
-			supabase
-				.from('chats')
-				.insert({
-					id,
-					user_id: authStore.user!.id,
-					title: 'New Chat',
-					model_id: modelId,
-					company_id: companyId,
-				})
-				.then(({ error }) => {
-					if (error) {
-						console.error('[chats] createChat backend insert failed:', error);
-					}
-				});
+			const { error } = await supabase.from('chats').insert({
+				id,
+				user_id: authStore.user!.id,
+				title: 'New Chat',
+				model_id: modelId,
+				company_id: companyId,
+			});
+			if (error) {
+				// Roll back the optimistic UI so we don't leave a phantom chat
+				// in the sidebar pointing at a row that doesn't exist in DB.
+				console.error('[chats] createChat backend insert failed:', error);
+				todayChats = todayChats.filter((c) => c.id !== id);
+				if (activeChat?.id === id) activeChat = null;
+				throw error;
+			}
 		} else {
 			const all = loadFromLocalStorage();
 			all.unshift({ ...chat, messages: [] });
@@ -386,6 +390,30 @@ export const chatStore = {
 		}
 	},
 
+	/**
+	 * Fetch a chat's messages without touching activeChat / messages state.
+	 * Used by side-effects like title regeneration that need the conversation
+	 * but shouldn't switch the user's currently-viewed chat.
+	 */
+	async fetchChatMessages(chatId: string): Promise<Message[]> {
+		if (useSupabase()) {
+			try {
+				const { data, error } = await supabase
+					.from('messages')
+					.select('*')
+					.eq('chat_id', chatId)
+					.order('created_at', { ascending: true });
+				if (error) throw error;
+				return (data ?? []).map(mapMessageRow);
+			} catch (err) {
+				console.error('[chats] fetchChatMessages failed:', err);
+				return [];
+			}
+		}
+		const local = getLocalChat(chatId);
+		return local?.messages ?? [];
+	},
+
 	async loadChat(chatId: string) {
 		if (useSupabase()) {
 			try {
@@ -463,10 +491,11 @@ export const chatStore = {
 	async updateChatTitle(chatId: string, title: string) {
 		if (useSupabase()) {
 			try {
-				await supabase
-					.from('chats')
-					.update({ title, updated_at: new Date().toISOString() })
-					.eq('id', chatId);
+				// Only update `title`. We deliberately do NOT touch `updated_at`
+				// here — renaming/regenerating the title is metadata, not new
+				// conversation activity, so the chat stays in its current
+				// Today/Others section after refresh.
+				await supabase.from('chats').update({ title }).eq('id', chatId);
 			} catch {
 				// fall through to localStorage
 			}
