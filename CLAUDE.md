@@ -2,6 +2,14 @@
 
 AI-powered chat application built with SvelteKit and shadcn-svelte.
 
+## Working rules (read every session)
+
+- **Never hallucinate, never guess.** If you don't know what something does, **read the actual code** — don't infer from naming, don't assume framework behaviors are universal. When the user reports a bug, find the bug by reading the code, not by adding "defensive" patches on top of what you think might be wrong.
+- **Don't add speculative fixes.** If you don't know the root cause, say so and ask for diagnostics (browser console, network tab, specific reproduction steps) before changing more code. Layered "this might help" patches make regressions worse.
+- **Verify before claiming done.** `npm run check` is the build truth — if it passes, the build is fine. LSP/IDE diagnostic warnings can be stale (TypeScript LSP cache issues are known in this project).
+- **Read consumers before refactoring a store/util.** Always grep for every callsite of a function/property before changing its signature.
+- **For any reactive state question:** read `src/lib/stores/chats.svelte.ts` and the relevant `.svelte` component end-to-end before guessing.
+
 ## Stack
 
 - **Language:** TypeScript

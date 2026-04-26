@@ -6,9 +6,10 @@ const STORAGE_KEY = 'unichat_chats';
 const MAX_LOCAL_CHATS = 50;
 const PAGE_SIZE = 30;
 
-// Two independent lists: today's chats and older chats. Each has its own
-// pagination state. The Today/Others split is by `updated_at` against local
-// midnight, captured at load time.
+// Three independent lists: pinned chats (across all dates), today's
+// non-pinned chats, and older non-pinned chats. The today/others split
+// uses `updated_at` against local midnight captured at load time.
+let pinnedChats = $state<Chat[]>([]);
 let todayChats = $state<Chat[]>([]);
 let otherChats = $state<Chat[]>([]);
 let activeChat = $state<Chat | null>(null);
@@ -75,6 +76,7 @@ function mapChatRow(row: Record<string, unknown>): Chat {
 		companyId: row.company_id as string | undefined,
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
+		pinned: (row.pinned as boolean) ?? false,
 	};
 }
 
@@ -101,6 +103,9 @@ function markSupabaseUnavailable(err: unknown) {
 // ── Store ────────────────────────────────────────────────────────
 
 export const chatStore = {
+	get pinnedChats() {
+		return pinnedChats;
+	},
 	get todayChats() {
 		return todayChats;
 	},
@@ -139,6 +144,7 @@ export const chatStore = {
 
 	async loadChats() {
 		// Reset state on every fresh load (sign-in, sign-out, initial mount).
+		pinnedChats = [];
 		todayChats = [];
 		otherChats = [];
 		othersCursor = null;
@@ -148,23 +154,33 @@ export const chatStore = {
 
 		if (useSupabase()) {
 			try {
-				// Fetch today's chats and the first page of older chats in parallel.
-				const [todayRes, othersRes] = await Promise.all([
+				// Three parallel queries: pinned (any date), today-unpinned, and
+				// the first page of older-unpinned.
+				const [pinnedRes, todayRes, othersRes] = await Promise.all([
 					supabase
 						.from('chats')
 						.select('*')
+						.eq('pinned', true)
+						.order('updated_at', { ascending: false }),
+					supabase
+						.from('chats')
+						.select('*')
+						.eq('pinned', false)
 						.gte('updated_at', todayIso)
 						.order('updated_at', { ascending: false }),
 					supabase
 						.from('chats')
 						.select('*')
+						.eq('pinned', false)
 						.lt('updated_at', todayIso)
 						.order('updated_at', { ascending: false })
 						.limit(PAGE_SIZE),
 				]);
+				if (pinnedRes.error) throw pinnedRes.error;
 				if (todayRes.error) throw todayRes.error;
 				if (othersRes.error) throw othersRes.error;
 
+				pinnedChats = (pinnedRes.data ?? []).map(mapChatRow);
 				todayChats = (todayRes.data ?? []).map(mapChatRow);
 				const otherRows = othersRes.data ?? [];
 				otherChats = otherRows.map(mapChatRow);
@@ -180,12 +196,14 @@ export const chatStore = {
 		{
 			// Guests load all of localStorage at once and split locally.
 			const local = loadFromLocalStorage().map(({ messages: _, ...chat }) => chat);
-			todayChats = local.filter((c) => new Date(c.updatedAt).getTime() >= todayBoundaryMs);
-			otherChats = local.filter((c) => new Date(c.updatedAt).getTime() < todayBoundaryMs);
+			pinnedChats = local.filter((c) => c.pinned);
+			const unpinned = local.filter((c) => !c.pinned);
+			todayChats = unpinned.filter((c) => new Date(c.updatedAt).getTime() >= todayBoundaryMs);
+			otherChats = unpinned.filter((c) => new Date(c.updatedAt).getTime() < todayBoundaryMs);
 		}
 	},
 
-	/** Append the next page of older chats. No-op for guests. */
+	/** Append the next page of older non-pinned chats. No-op for guests. */
 	async loadMoreOtherChats() {
 		if (othersLoadingMore || !othersHasMore || !othersCursor || !useSupabase()) return;
 		othersLoadingMore = true;
@@ -193,6 +211,7 @@ export const chatStore = {
 			const { data, error } = await supabase
 				.from('chats')
 				.select('*')
+				.eq('pinned', false)
 				.lt('updated_at', othersCursor)
 				.order('updated_at', { ascending: false })
 				.limit(PAGE_SIZE);
@@ -260,6 +279,7 @@ export const chatStore = {
 			companyId,
 			createdAt: now,
 			updatedAt: now,
+			pinned: false,
 		};
 
 		// Optimistic UI update: sidebar reflects the new chat immediately.
@@ -289,6 +309,81 @@ export const chatStore = {
 		}
 
 		return id;
+	},
+
+	/**
+	 * Move a chat into the Pinned section. Optimistically removes from
+	 * today/other and prepends to pinnedChats; reverts on backend failure.
+	 */
+	async pinChat(chatId: string) {
+		const chat =
+			todayChats.find((c) => c.id === chatId) ?? otherChats.find((c) => c.id === chatId);
+		if (!chat) return; // already pinned or not found
+
+		const wasInToday = todayChats.some((c) => c.id === chatId);
+		const snapshot: Chat = { ...chat };
+
+		// Optimistic update
+		if (wasInToday) {
+			todayChats = todayChats.filter((c) => c.id !== chatId);
+		} else {
+			otherChats = otherChats.filter((c) => c.id !== chatId);
+		}
+		pinnedChats = [{ ...chat, pinned: true }, ...pinnedChats];
+
+		if (useSupabase()) {
+			const { error } = await supabase
+				.from('chats')
+				.update({ pinned: true })
+				.eq('id', chatId);
+			if (error) {
+				console.error('[chats] pinChat failed:', error);
+				// Revert
+				pinnedChats = pinnedChats.filter((c) => c.id !== chatId);
+				if (wasInToday) todayChats = [snapshot, ...todayChats];
+				else otherChats = [snapshot, ...otherChats];
+			}
+		} else {
+			updateLocalChat(chatId, (c) => {
+				c.pinned = true;
+			});
+		}
+	},
+
+	/**
+	 * Unpin a chat. Optimistically moves it from pinnedChats back to today
+	 * or other based on its updatedAt timestamp; reverts on backend failure.
+	 */
+	async unpinChat(chatId: string) {
+		const chat = pinnedChats.find((c) => c.id === chatId);
+		if (!chat) return;
+
+		const snapshot: Chat = { ...chat };
+		const isToday = new Date(chat.updatedAt).getTime() >= todayBoundaryMs;
+
+		// Optimistic update
+		pinnedChats = pinnedChats.filter((c) => c.id !== chatId);
+		const unpinned: Chat = { ...chat, pinned: false };
+		if (isToday) todayChats = [unpinned, ...todayChats];
+		else otherChats = [unpinned, ...otherChats];
+
+		if (useSupabase()) {
+			const { error } = await supabase
+				.from('chats')
+				.update({ pinned: false })
+				.eq('id', chatId);
+			if (error) {
+				console.error('[chats] unpinChat failed:', error);
+				// Revert
+				if (isToday) todayChats = todayChats.filter((c) => c.id !== chatId);
+				else otherChats = otherChats.filter((c) => c.id !== chatId);
+				pinnedChats = [snapshot, ...pinnedChats];
+			}
+		} else {
+			updateLocalChat(chatId, (c) => {
+				c.pinned = false;
+			});
+		}
 	},
 
 	async loadChat(chatId: string) {
@@ -380,6 +475,8 @@ export const chatStore = {
 				chat.title = title;
 			});
 		}
+		const inPinned = pinnedChats.find((c) => c.id === chatId);
+		if (inPinned) inPinned.title = title;
 		const inToday = todayChats.find((c) => c.id === chatId);
 		if (inToday) inToday.title = title;
 		const inOthers = otherChats.find((c) => c.id === chatId);
@@ -398,6 +495,7 @@ export const chatStore = {
 			const all = loadFromLocalStorage().filter((c) => c.id !== chatId);
 			saveToLocalStorage(all);
 		}
+		pinnedChats = pinnedChats.filter((c) => c.id !== chatId);
 		todayChats = todayChats.filter((c) => c.id !== chatId);
 		otherChats = otherChats.filter((c) => c.id !== chatId);
 		if (activeChat?.id === chatId) {
