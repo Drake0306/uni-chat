@@ -91,7 +91,7 @@ supabase/
 
 ## Key Design Decisions
 
-- **Companies, not providers.** The user sees parent companies (Google, Meta, Anthropic). Internal routing providers (OpenRouter, Groq) are invisible.
+- **Companies group models; providers are surfaced as a chip.** The selector groups by parent company (Google, Meta, Anthropic, OpenAI, …) — that's the primary hierarchy. Each model has a `provider` field (`gemini | openrouter | groq | mistral | anthropic | openai | …`) shown as a small "via [Provider]" chip with logo in the description area, so users know which service hosts the inference. (`PROVIDERS` map in `models.ts` defines the provider → display-name + icon mapping.) Note: there's also a top-level "Groq" company for Groq-proprietary agentic models (Compound, Compound Mini).
 - **models.ts is the config hub.** Each model has `route` (internal API path) and `apiModelId` (what to send to the provider). Flip `enabled` to toggle models. Flip `free` to mark pricing.
 - **All streaming is normalized to OpenAI SSE format.** Gemini's provider transforms its response. Others are passthrough. Thinking models emit `delta.reasoning_content` alongside `delta.content`.
 - **Typed capabilities drive the UI.** `ModelCapabilities` object (thinking/vision/tools/webSearch/files/imageGeneration) controls badges in the selector and toolbar buttons in the composer.

@@ -19,7 +19,7 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
-	import { companies, iconUrl, hasEnabledModels, capabilityLabels, type Company, type Model } from '$lib/config/models.js';
+	import { companies, iconUrl, hasEnabledModels, capabilityLabels, PROVIDERS, type Company, type Model } from '$lib/config/models.js';
 
 	let {
 		selected = $bindable(),
@@ -107,6 +107,15 @@
 			<Badge class="h-4 gap-0.5 border-0 bg-rose-500/15 px-1.5 text-[10px] font-medium text-rose-600"><ImageIcon class="size-2.5" />Image</Badge>
 		{/if}
 		<span class="text-[10px] text-muted-foreground">{model.contextWindow} ctx</span>
+	</div>
+	<div class="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+		<span>via</span>
+		<img
+			src={iconUrl(PROVIDERS[model.provider].icon)}
+			alt=""
+			class="size-3"
+		/>
+		<span class="font-medium">{PROVIDERS[model.provider].name}</span>
 	</div>
 {/snippet}
 
