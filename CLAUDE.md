@@ -19,6 +19,7 @@ AI-powered chat application built with SvelteKit and shadcn-svelte.
 - **Client-side rendering only.** `src/routes/+layout.ts` exports `ssr = false`.
 - **Chat page is the home page.** No separate landing page.
 - **No login wall.** Auth enhances but doesn't gate. Guest users get localStorage persistence.
+- **URL-addressable chats.** `/` is the empty composer; `/chat/[id]` loads a specific chat. Both routes render `<ChatView chatId={...} />` (extracted to `src/lib/components/chat-view.svelte`).
 - **SvelteKit API routes for backend.** `src/routes/api/` with `+server.ts` files.
 - **Dual persistence:** Authenticated users → Supabase. Guests → localStorage. Falls back to localStorage if Supabase tables don't exist.
 
@@ -27,9 +28,10 @@ AI-powered chat application built with SvelteKit and shadcn-svelte.
 ```
 src/
   routes/
-    +layout.svelte            ← sidebar provider
+    +layout.svelte            ← sidebar provider + sync-prompt-dialog mount
     +layout.ts                ← ssr = false
-    +page.svelte              ← chat UI (home page)
+    +page.svelte              ← thin wrapper: <ChatView /> (no chatId)
+    chat/[id]/+page.svelte    ← thin wrapper: <ChatView chatId={page.params.id} />
     api/
       chat/+server.ts         ← unified router: validates, rate-limits, forwards to provider, tee() saves response server-side
       providers/
@@ -62,6 +64,8 @@ src/
     components/
       ui/                     ← shadcn-svelte (do not edit)
       app-sidebar.svelte      ← sidebar: new chat, search (Cmd+K), chat history, auth footer
+      chat-view.svelte        ← main chat UI; takes optional chatId prop, used by both routes
+      sync-prompt-dialog.svelte ← post-login dialog: sync localStorage chats to account or discard
       model-selector.svelte   ← popover model picker (company sidebar + model grid + capability badges)
       markdown-renderer.svelte ← renders markdown with code blocks (copy/collapse), tables (copy), math (KaTeX)
       thinking-block.svelte   ← collapsible thinking/reasoning display with progress bar
@@ -104,9 +108,19 @@ avatar, badge, button, command, dialog, dropdown-menu, input, popover, scroll-ar
 
 ## Svelte 5 Reactivity Patterns
 
-- **Streaming messages:** The page uses a local `$state<Message[]>` array for messages. Push user/assistant messages to it, then mutate `assistantMsg.content += chunk` via the proxy reference (`messages[messages.length - 1]`). An `$effect` syncs the store's messages to the local array when switching chats.
-- **Store getters on plain objects** don't create reactive proxies. For mutable arrays that need reactivity, use reassignment (`messages = [...messages, msg]`) not `push()`.
+- **Messages live in `chatStore`, not in components.** ChatView reads via `const messages = $derived(chatStore.messages)`. Streaming mutations target `chatStore.lastMessage()!` so they survive the new-chat → `/chat/<id>` navigation (the old component unmounts but the store object persists, and the new component sees the same proxy).
+- **Cross-navigation flags belong in the store, not in components.** `chatStore.streaming` (set around the fetch in `handleSend`) is read by the polling `$effect` to avoid `loadChat` clobbering an in-flight stream. Component-local `loading` is reset on remount.
+- **Use `untrack()` in `$effect` to prevent feedback loops.** The `$effect` at the top of `chat-view.svelte` reads `chatStore.activeChat` for routing decisions but must NOT re-run when `activeChat` changes (otherwise `createChat` would trigger `clearActive`). Wrap the body in `untrack(...)` so only `chatId` (the prop) is tracked.
+- **Store getters on plain objects** don't create reactive proxies. For mutable arrays use reassignment (`messages = [...messages, msg]`) not `push()`. For object-property mutations on items inside a `$state` array, the elements become deeply reactive automatically.
 - **Don't `await` persistence during streaming.** Fire-and-forget `chatStore.addMessage()` calls so the UI doesn't block.
+
+## Routing
+
+- `/` → `<ChatView />` (no chatId). Empty composer state.
+- `/chat/[id]` → `<ChatView chatId={page.params.id} />` (use `$app/state`, NOT deprecated `$app/stores`).
+- New chat: at `/`, after first message creates the chat, `goto('/chat/<id>', { replaceState: true, noScroll: true })` happens AFTER `pushMessage` calls so the new component mounts with messages already in the store.
+- Sidebar chat items are real `<a href="/chat/{id}">` anchors (cmd-click → new tab).
+- Delete-active-chat → `goto('/', { replaceState: true })`.
 
 ## Auth Flow
 
@@ -123,7 +137,7 @@ avatar, badge, button, command, dialog, dropdown-menu, input, popover, scroll-ar
 - **Authenticated:** Supabase PostgreSQL (chats + messages tables with RLS)
 - **Guest:** localStorage (`unichat_chats` key, max 50 chats)
 - **Fallback:** If Supabase tables don't exist, `supabaseAvailable` flag disables DB queries and falls back to localStorage even when authenticated
-- **Migration:** `chatStore.migrateLocalToSupabase()` moves guest chats to DB on first sign-in
+- **Migration:** When a guest signs in with chats in localStorage, a sync prompt dialog (`sync-prompt-dialog.svelte`, mounted in `+layout.svelte`) appears. "Sync to my account" calls `chatStore.migrateLocalToSupabase()` (note: regenerates IDs, so the URL is reset to `/`). "Discard" clears `unichat_chats` from localStorage. Triggered by `authStore.pendingSyncDecision` flag, set synchronously inside `onAuthStateChange` on `SIGNED_IN`.
 - **Server-side response persistence:** `/api/chat` uses `tee()` to split the LLM stream — one branch streams to client, the other accumulates and saves to Supabase via service client. Responses survive browser refresh/close. Client sends `chatId` + `messageId` in the request body (authenticated users only). Server creates an empty assistant message row immediately, updates with full content when stream completes. Client polls every 3s for pending responses.
 - **Browser Supabase client uses `cache: 'no-store'`** to prevent stale query results on refresh.
 
@@ -146,7 +160,6 @@ Run SQL migrations in Supabase SQL Editor (or via CLI: `npx supabase login && np
 
 ## Known Issues / Pending Work
 
-- **URL-based chat routing not implemented.** Phase 8 of the plan — `/chat/[id]` routes + extracted `ChatView` component. Currently all chats live on the root page.
 - **Error messages from failed API calls are excluded from conversation history** via `isError` flag on Message type.
 - **Server-side persistence limitation:** If the server process dies mid-stream (deploy, crash), the in-flight response is lost. See `docs/response-persistence.md` for the job queue upgrade path.
 

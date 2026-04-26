@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
-	import MessageSquareIcon from '@lucide/svelte/icons/message-square';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import type { Chat } from '$lib/types.js';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -21,7 +23,9 @@
 
 	const isMac = browser && navigator.platform.toUpperCase().includes('MAC');
 
-	// Load chats after auth resolves
+	// Load chats once after auth resolves. Sign-in/out cleanup is handled
+	// explicitly in the dropdown handlers below — keeping it imperative avoids
+	// reactive feedback loops with the Supabase auth callback.
 	let chatsLoaded = false;
 	$effect(() => {
 		if (!authStore.loading && !chatsLoaded) {
@@ -29,6 +33,14 @@
 			chatStore.loadChats();
 		}
 	});
+
+	async function handleSignOut() {
+		const wasOnChat = page.url.pathname.startsWith('/chat/');
+		await authStore.signOut();
+		chatStore.clearActive();
+		await chatStore.loadChats();
+		if (wasOnChat) goto('/', { replaceState: true });
+	}
 
 	onMount(() => {
 		function handleKeydown(e: KeyboardEvent) {
@@ -43,13 +55,63 @@
 
 	function selectChat(chat: { id: string }) {
 		commandStore.open = false;
-		chatStore.loadChat(chat.id);
+		goto(`/chat/${chat.id}`);
 	}
 
 	function newChat() {
-		chatStore.clearActive();
+		goto('/');
 	}
+
+	async function deleteChat(chatId: string) {
+		const wasActive = page.url.pathname === `/chat/${chatId}`;
+		await chatStore.deleteChat(chatId);
+		if (wasActive) goto('/', { replaceState: true });
+	}
+
+	// Group chats into Pinned / Today / Others. "Today" boundary is local midnight.
+	const groupedChats = $derived.by(() => {
+		const todayStart = new Date();
+		todayStart.setHours(0, 0, 0, 0);
+		const todayMs = todayStart.getTime();
+		const pinned: Chat[] = [];
+		const today: Chat[] = [];
+		const others: Chat[] = [];
+		for (const chat of chatStore.chats) {
+			if (chat.pinned) {
+				pinned.push(chat);
+				continue;
+			}
+			const updatedMs = new Date(chat.updatedAt).getTime();
+			if (updatedMs >= todayMs) today.push(chat);
+			else others.push(chat);
+		}
+		return { pinned, today, others };
+	});
+
+	const hasAnyChats = $derived(chatStore.chats.length > 0);
 </script>
+
+{#snippet chatRow(chat: Chat)}
+	{@const isActive = page.url.pathname === `/chat/${chat.id}`}
+	<Sidebar.SidebarMenuItem>
+		<Sidebar.SidebarMenuButton isActive={isActive} class="pl-5">
+			{#snippet child({ props })}
+				<a {...props} href="/chat/{chat.id}">
+					<span>{chat.title}</span>
+				</a>
+			{/snippet}
+		</Sidebar.SidebarMenuButton>
+		<Sidebar.SidebarMenuAction showOnHover>
+			<button
+				class="flex size-full items-center justify-center text-muted-foreground hover:text-destructive"
+				onclick={() => deleteChat(chat.id)}
+				aria-label="Delete chat"
+			>
+				<TrashIcon class="size-3.5" />
+			</button>
+		</Sidebar.SidebarMenuAction>
+	</Sidebar.SidebarMenuItem>
+{/snippet}
 
 <Sidebar.Sidebar collapsible="offcanvas">
 	<Sidebar.SidebarHeader>
@@ -94,37 +156,50 @@
 
 	<!-- Chat history -->
 	<Sidebar.SidebarContent>
-		<Sidebar.SidebarGroup>
-			<Sidebar.SidebarGroupLabel>Recent</Sidebar.SidebarGroupLabel>
-			<Sidebar.SidebarGroupContent>
-				<Sidebar.SidebarMenu>
-					{#each chatStore.chats as chat}
-						<Sidebar.SidebarMenuItem>
-							<Sidebar.SidebarMenuButton
-								class={chatStore.activeChat?.id === chat.id ? 'bg-sidebar-accent' : ''}
-								onclick={() => selectChat(chat)}
-							>
-								<MessageSquareIcon class="size-4" />
-								<span>{chat.title}</span>
-							</Sidebar.SidebarMenuButton>
-							<Sidebar.SidebarMenuAction>
-								<button
-									class="flex size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/menu-item:opacity-100"
-									onclick={() => chatStore.deleteChat(chat.id)}
-								>
-									<TrashIcon class="size-3" />
-								</button>
-							</Sidebar.SidebarMenuAction>
-						</Sidebar.SidebarMenuItem>
-					{/each}
-					{#if chatStore.chats.length === 0}
-						<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-							No conversations yet
-						</div>
-					{/if}
-				</Sidebar.SidebarMenu>
-			</Sidebar.SidebarGroupContent>
-		</Sidebar.SidebarGroup>
+		{#if groupedChats.pinned.length > 0}
+			<Sidebar.SidebarGroup>
+				<Sidebar.SidebarGroupLabel>Pinned</Sidebar.SidebarGroupLabel>
+				<Sidebar.SidebarGroupContent>
+					<Sidebar.SidebarMenu>
+						{#each groupedChats.pinned as chat (chat.id)}
+							{@render chatRow(chat)}
+						{/each}
+					</Sidebar.SidebarMenu>
+				</Sidebar.SidebarGroupContent>
+			</Sidebar.SidebarGroup>
+		{/if}
+
+		{#if groupedChats.today.length > 0}
+			<Sidebar.SidebarGroup>
+				<Sidebar.SidebarGroupLabel>Today</Sidebar.SidebarGroupLabel>
+				<Sidebar.SidebarGroupContent>
+					<Sidebar.SidebarMenu>
+						{#each groupedChats.today as chat (chat.id)}
+							{@render chatRow(chat)}
+						{/each}
+					</Sidebar.SidebarMenu>
+				</Sidebar.SidebarGroupContent>
+			</Sidebar.SidebarGroup>
+		{/if}
+
+		{#if groupedChats.others.length > 0}
+			<Sidebar.SidebarGroup>
+				<Sidebar.SidebarGroupLabel>Others</Sidebar.SidebarGroupLabel>
+				<Sidebar.SidebarGroupContent>
+					<Sidebar.SidebarMenu>
+						{#each groupedChats.others as chat (chat.id)}
+							{@render chatRow(chat)}
+						{/each}
+					</Sidebar.SidebarMenu>
+				</Sidebar.SidebarGroupContent>
+			</Sidebar.SidebarGroup>
+		{/if}
+
+		{#if !hasAnyChats}
+			<div class="px-3 py-4 text-center text-sm text-muted-foreground">
+				No conversations yet
+			</div>
+		{/if}
 	</Sidebar.SidebarContent>
 
 	<!-- Footer: Auth -->
@@ -161,7 +236,7 @@
 							Settings
 						</DropdownMenu.Item>
 						<DropdownMenu.Separator />
-						<DropdownMenu.Item onSelect={() => authStore.signOut()} variant="destructive">
+						<DropdownMenu.Item onSelect={handleSignOut} variant="destructive">
 							<LogOutIcon class="mr-2 size-4" />
 							Sign out
 						</DropdownMenu.Item>
@@ -191,7 +266,6 @@
 		<Command.Group heading="Recent Chats">
 			{#each chatStore.chats as chat}
 				<Command.Item onSelect={() => selectChat(chat)} class="py-3 text-sm">
-					<MessageSquareIcon class="mr-2 size-4" />
 					<span>{chat.title}</span>
 				</Command.Item>
 			{/each}

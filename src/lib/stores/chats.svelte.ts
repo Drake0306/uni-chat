@@ -8,6 +8,10 @@ const MAX_LOCAL_CHATS = 50;
 let chats = $state<Chat[]>([]);
 let activeChat = $state<Chat | null>(null);
 let messages = $state<Message[]>([]);
+// True while a client-side fetch is actively streaming a response.
+// Lives in the store (not a component) so it survives the new-chat → /chat/<id>
+// navigation; the polling $effect uses it to avoid clobbering an in-flight stream.
+let streaming = $state(false);
 
 // If Supabase DB queries fail, stop trying and use localStorage
 let supabaseAvailable = true;
@@ -87,6 +91,12 @@ export const chatStore = {
 	},
 	get messages() {
 		return messages;
+	},
+	get streaming() {
+		return streaming;
+	},
+	setStreaming(value: boolean) {
+		streaming = value;
 	},
 
 	/** Push a message to the current array and trigger reactivity. */
@@ -284,14 +294,33 @@ export const chatStore = {
 		messages = [];
 	},
 
-	/** Migrate localStorage chats to Supabase after sign-in */
-	async migrateLocalToSupabase() {
+	/** Read all localStorage chats (with messages). Used by the post-login sync dialog. */
+	getLocalChats(): (Chat & { messages: Message[] })[] {
+		return loadFromLocalStorage();
+	},
+
+	/**
+	 * Migrate localStorage chats to Supabase after sign-in.
+	 * @param selectedIds - if provided, only migrate chats whose IDs are in this list.
+	 *                     Otherwise migrate all. Either way, localStorage is cleared at the end.
+	 */
+	async migrateLocalToSupabase(selectedIds?: string[]) {
 		if (!useSupabase()) return;
+		if (selectedIds && selectedIds.length === 0) return;
+
 		const localChats = loadFromLocalStorage();
 		if (localChats.length === 0) return;
 
-		for (const chat of localChats) {
-			const { data: newChat } = await supabase
+		const selectedSet = selectedIds ? new Set(selectedIds) : null;
+		const toMigrate = selectedSet ? localChats.filter((c) => selectedSet.has(c.id)) : localChats;
+
+		// Track which local chats migrated cleanly. Only remove those from
+		// localStorage at the end — keep the failed ones so the user can retry.
+		const succeededLocalIds: string[] = [];
+		const failures: { chatId: string; title: string; reason: string }[] = [];
+
+		for (const chat of toMigrate) {
+			const { data: newChat, error: chatError } = await supabase
 				.from('chats')
 				.insert({
 					user_id: authStore.user!.id,
@@ -302,21 +331,80 @@ export const chatStore = {
 				.select()
 				.single();
 
-			if (newChat && chat.messages.length > 0) {
-				await supabase.from('messages').insert(
-					chat.messages.map((m) => ({
-						chat_id: newChat.id,
-						role: m.role,
-						content: m.content,
-						reasoning: m.reasoning,
-						model_name: m.modelName,
-						is_error: m.isError ?? false,
-					}))
-				);
+			if (chatError || !newChat) {
+				failures.push({
+					chatId: chat.id,
+					title: chat.title,
+					reason: chatError?.message ?? 'no row returned',
+				});
+				continue;
 			}
+
+			// Sanitize messages: the migrations table CHECK constrains role to
+			// ('user','assistant','system') and content NOT NULL. One bad row
+			// fails the whole atomic batch insert — defensive validation here.
+			const validMessages = chat.messages
+				.filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+				.map((m) => ({
+					chat_id: newChat.id,
+					role: m.role,
+					content: m.content ?? '',
+					reasoning: m.reasoning ?? null,
+					model_name: m.modelName ?? null,
+					is_error: m.isError ?? false,
+				}));
+
+			if (validMessages.length > 0) {
+				const { data: inserted, error: msgError } = await supabase
+					.from('messages')
+					.insert(validMessages)
+					.select('id');
+
+				if (msgError) {
+					// Chat row inserted but messages failed — half-migrated.
+					// Roll back the chat row so the user doesn't see an empty chat.
+					await supabase.from('chats').delete().eq('id', newChat.id);
+					failures.push({
+						chatId: chat.id,
+						title: chat.title,
+						reason: `messages: ${msgError.message}`,
+					});
+					continue;
+				}
+
+				// Sanity-check: did all rows actually land? RLS could silently drop rows.
+				if (!inserted || inserted.length !== validMessages.length) {
+					await supabase.from('chats').delete().eq('id', newChat.id);
+					failures.push({
+						chatId: chat.id,
+						title: chat.title,
+						reason: `messages: expected ${validMessages.length} inserted, got ${inserted?.length ?? 0}`,
+					});
+					continue;
+				}
+			}
+
+			succeededLocalIds.push(chat.id);
 		}
 
-		localStorage.removeItem(STORAGE_KEY);
+		// Remove successfully-migrated chats from localStorage; keep failures.
+		const all = loadFromLocalStorage();
+		const remaining = all.filter((c) => !succeededLocalIds.includes(c.id));
+		if (remaining.length === 0) {
+			localStorage.removeItem(STORAGE_KEY);
+		} else {
+			saveToLocalStorage(remaining);
+		}
+
 		await chatStore.loadChats();
+
+		if (failures.length > 0) {
+			console.error('[migrate] Failed to sync', failures.length, 'chat(s):', failures);
+			throw new Error(
+				`Failed to sync ${failures.length} of ${toMigrate.length} chats. ` +
+					`First error: ${failures[0].reason}. ` +
+					`Failed chats remain in localStorage.`
+			);
+		}
 	},
 };

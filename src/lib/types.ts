@@ -15,4 +15,5 @@ export type Chat = {
 	companyId?: string;
 	createdAt: string;
 	updatedAt: string;
+	pinned?: boolean;
 };
