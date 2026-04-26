@@ -136,6 +136,8 @@ export const companies: Company[] = [
 			{ id: 'meta-llama-3.3-70b', name: 'Llama 3.3 70B', icon: 'meta-color', capabilities: caps(), contextWindow: '128K', free: true, enabled: true, provider: 'openrouter', route: ROUTES.openrouter, apiModelId: 'meta-llama/llama-3.3-70b-instruct:free' },
 			{ id: 'meta-llama-3.3-70b-fast', name: 'Llama 3.3 70B (Fast)', icon: 'meta-color', capabilities: caps(), contextWindow: '128K', free: true, enabled: true, provider: 'groq', route: ROUTES.groq, apiModelId: 'llama-3.3-70b-versatile' },
 			{ id: 'meta-llama-3.1-8b', name: 'Llama 3.1 8B (Instant)', icon: 'meta-color', capabilities: caps(), contextWindow: '128K', free: true, enabled: true, provider: 'groq', route: ROUTES.groq, apiModelId: 'llama-3.1-8b-instant' },
+			// Groq preview — for evaluation only, may be removed without notice
+			{ id: 'meta-llama-4-scout-fast', name: 'Llama 4 Scout (Fast)', icon: 'meta-color', capabilities: caps({ vision: true }), contextWindow: '128K', free: true, enabled: true, isNew: true, provider: 'groq', route: ROUTES.groq, apiModelId: 'meta-llama/llama-4-scout-17b-16e-instruct' },
 			{ id: 'meta-llama-4-maverick', name: 'Llama 4 Maverick', icon: 'meta-color', capabilities: caps({ vision: true }), contextWindow: '1M', free: false, enabled: false, isNew: true, provider: 'openrouter', route: ROUTES.openrouter, apiModelId: 'meta-llama/llama-4-maverick' },
 			{ id: 'meta-llama-4-scout', name: 'Llama 4 Scout', icon: 'meta-color', capabilities: caps({ vision: true }), contextWindow: '10M', free: false, enabled: false, isNew: true, provider: 'openrouter', route: ROUTES.openrouter, apiModelId: 'meta-llama/llama-4-scout' },
 		],
@@ -188,6 +190,8 @@ export const companies: Company[] = [
 		icon: 'qwen-color',
 		models: [
 			{ id: 'qwen3-coder-free', name: 'Qwen3 Coder 480B', icon: 'qwen-color', capabilities: caps(), contextWindow: '262K', free: true, enabled: true, isNew: true, provider: 'openrouter', route: ROUTES.openrouter, apiModelId: 'qwen/qwen3-coder-480b:free' },
+			// Groq preview — for evaluation only, may be removed without notice
+			{ id: 'qwen3-32b-fast', name: 'Qwen 3 32B (Fast)', icon: 'qwen-color', capabilities: caps({ thinking: true }), contextWindow: '128K', free: true, enabled: true, isNew: true, provider: 'groq', route: ROUTES.groq, apiModelId: 'qwen/qwen3-32b' },
 			{ id: 'qwen-3', name: 'Qwen 3', icon: 'qwen-color', capabilities: caps({ thinking: true, vision: true }), contextWindow: '128K', free: false, enabled: false, isNew: true, provider: 'qwen', route: ROUTES.qwen, apiModelId: 'qwen-3' },
 			{ id: 'qwen-2.5-max', name: 'Qwen 2.5 Max', icon: 'qwen-color', capabilities: caps({ vision: true }), contextWindow: '128K', free: false, enabled: false, provider: 'qwen', route: ROUTES.qwen, apiModelId: 'qwen-2.5-max' },
 		],
