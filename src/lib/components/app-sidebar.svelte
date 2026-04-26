@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -68,27 +68,59 @@
 		if (wasActive) goto('/', { replaceState: true });
 	}
 
-	// Group chats into Pinned / Today / Others. "Today" boundary is local midnight.
-	const groupedChats = $derived.by(() => {
-		const todayStart = new Date();
-		todayStart.setHours(0, 0, 0, 0);
-		const todayMs = todayStart.getTime();
-		const pinned: Chat[] = [];
-		const today: Chat[] = [];
-		const others: Chat[] = [];
-		for (const chat of chatStore.chats) {
-			if (chat.pinned) {
-				pinned.push(chat);
-				continue;
-			}
-			const updatedMs = new Date(chat.updatedAt).getTime();
-			if (updatedMs >= todayMs) today.push(chat);
-			else others.push(chat);
-		}
-		return { pinned, today, others };
+	// Two independent lists from the store. The store handles the today/older
+	// split server-side and exposes them as separate $state arrays.
+	const hasAnyChats = $derived(chatStore.todayChats.length > 0 || chatStore.otherChats.length > 0);
+
+	// IntersectionObserver on the Others list sentinel: lazy-load older chats.
+	let sentinel: HTMLDivElement | undefined = $state();
+	$effect(() => {
+		if (!sentinel) return;
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries[0].isIntersecting) chatStore.loadMoreOtherChats();
+			},
+			{ rootMargin: '120px' }
+		);
+		observer.observe(sentinel);
+		return () => observer.disconnect();
 	});
 
-	const hasAnyChats = $derived(chatStore.chats.length > 0);
+	// Server-side search for the Cmd+K palette. Debounced 300ms.
+	let searchQuery = $state('');
+	let searchResults = $state<Chat[]>([]);
+	let searchLoading = $state(false);
+	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+	$effect(() => {
+		const q = searchQuery;
+		untrack(() => {
+			if (searchTimer) clearTimeout(searchTimer);
+			if (!q.trim()) {
+				searchResults = [];
+				searchLoading = false;
+				return;
+			}
+			searchLoading = true;
+			searchTimer = setTimeout(async () => {
+				const results = await chatStore.searchChats(q);
+				if (searchQuery === q) {
+					searchResults = results;
+					searchLoading = false;
+				}
+			}, 300);
+		});
+	});
+
+	// Reset search when the palette closes.
+	$effect(() => {
+		if (commandStore.open) return;
+		untrack(() => {
+			searchQuery = '';
+			searchResults = [];
+			searchLoading = false;
+		});
+	});
 </script>
 
 {#snippet chatRow(chat: Chat)}
@@ -152,29 +184,18 @@
 		</div>
 	</Sidebar.SidebarHeader>
 
-	<Separator class="mx-2" />
+	<div class="px-2">
+		<Separator />
+	</div>
 
 	<!-- Chat history -->
 	<Sidebar.SidebarContent>
-		{#if groupedChats.pinned.length > 0}
-			<Sidebar.SidebarGroup>
-				<Sidebar.SidebarGroupLabel>Pinned</Sidebar.SidebarGroupLabel>
-				<Sidebar.SidebarGroupContent>
-					<Sidebar.SidebarMenu>
-						{#each groupedChats.pinned as chat (chat.id)}
-							{@render chatRow(chat)}
-						{/each}
-					</Sidebar.SidebarMenu>
-				</Sidebar.SidebarGroupContent>
-			</Sidebar.SidebarGroup>
-		{/if}
-
-		{#if groupedChats.today.length > 0}
+		{#if chatStore.todayChats.length > 0}
 			<Sidebar.SidebarGroup>
 				<Sidebar.SidebarGroupLabel>Today</Sidebar.SidebarGroupLabel>
 				<Sidebar.SidebarGroupContent>
 					<Sidebar.SidebarMenu>
-						{#each groupedChats.today as chat (chat.id)}
+						{#each chatStore.todayChats as chat (chat.id)}
 							{@render chatRow(chat)}
 						{/each}
 					</Sidebar.SidebarMenu>
@@ -182,12 +203,12 @@
 			</Sidebar.SidebarGroup>
 		{/if}
 
-		{#if groupedChats.others.length > 0}
+		{#if chatStore.otherChats.length > 0}
 			<Sidebar.SidebarGroup>
 				<Sidebar.SidebarGroupLabel>Others</Sidebar.SidebarGroupLabel>
 				<Sidebar.SidebarGroupContent>
 					<Sidebar.SidebarMenu>
-						{#each groupedChats.others as chat (chat.id)}
+						{#each chatStore.otherChats as chat (chat.id)}
 							{@render chatRow(chat)}
 						{/each}
 					</Sidebar.SidebarMenu>
@@ -200,11 +221,19 @@
 				No conversations yet
 			</div>
 		{/if}
+
+		{#if chatStore.othersHasMore}
+			<div bind:this={sentinel} class="flex h-10 items-center justify-center text-xs text-muted-foreground">
+				{chatStore.othersLoadingMore ? 'Loading…' : ''}
+			</div>
+		{/if}
 	</Sidebar.SidebarContent>
 
 	<!-- Footer: Auth -->
 	<Sidebar.SidebarFooter>
-		<Separator class="mx-2 mb-1" />
+		<div class="mb-1 px-2">
+			<Separator />
+		</div>
 		<div class="px-2 pb-1">
 			{#if authStore.loading}
 				<Skeleton class="h-10 w-full rounded-lg" />
@@ -259,16 +288,35 @@
 </Sidebar.Sidebar>
 
 <!-- Command palette (Cmd+K / Ctrl+K) -->
-<Command.Dialog bind:open={commandStore.open} class="sm:max-w-xl! max-w-[calc(100%-2rem)]!">
-	<Command.Input placeholder="Search conversations..." class="h-12 text-base" />
-	<Command.List class="max-h-[400px]">
-		<Command.Empty>No conversations found.</Command.Empty>
-		<Command.Group heading="Recent Chats">
-			{#each chatStore.chats as chat}
-				<Command.Item onSelect={() => selectChat(chat)} class="py-3 text-sm">
-					<span>{chat.title}</span>
-				</Command.Item>
-			{/each}
-		</Command.Group>
+<Command.Dialog
+	bind:open={commandStore.open}
+	shouldFilter={false}
+	class="sm:max-w-xl! max-w-[calc(100%-2rem)]!"
+>
+	<Command.Input bind:value={searchQuery} placeholder="Search conversations..." class="h-12 text-base" />
+	<Command.List class="max-h-100">
+		{#if searchQuery.trim()}
+			{#if searchLoading}
+				<div class="px-4 py-6 text-center text-sm text-muted-foreground">Searching…</div>
+			{:else if searchResults.length === 0}
+				<Command.Empty>No conversations found.</Command.Empty>
+			{:else}
+				<Command.Group heading="Search Results">
+					{#each searchResults as chat (chat.id)}
+						<Command.Item value={chat.id} onSelect={() => selectChat(chat)} class="py-3 text-sm">
+							<span>{chat.title}</span>
+						</Command.Item>
+					{/each}
+				</Command.Group>
+			{/if}
+		{:else}
+			<Command.Group heading="Recent Chats">
+				{#each [...chatStore.todayChats, ...chatStore.otherChats].slice(0, 10) as chat (chat.id)}
+					<Command.Item value={chat.id} onSelect={() => selectChat(chat)} class="py-3 text-sm">
+						<span>{chat.title}</span>
+					</Command.Item>
+				{/each}
+			</Command.Group>
+		{/if}
 	</Command.List>
 </Command.Dialog>

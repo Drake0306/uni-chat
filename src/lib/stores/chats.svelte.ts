@@ -4,14 +4,32 @@ import type { Chat, Message } from '$lib/types.js';
 
 const STORAGE_KEY = 'unichat_chats';
 const MAX_LOCAL_CHATS = 50;
+const PAGE_SIZE = 30;
 
-let chats = $state<Chat[]>([]);
+// Two independent lists: today's chats and older chats. Each has its own
+// pagination state. The Today/Others split is by `updated_at` against local
+// midnight, captured at load time.
+let todayChats = $state<Chat[]>([]);
+let otherChats = $state<Chat[]>([]);
 let activeChat = $state<Chat | null>(null);
 let messages = $state<Message[]>([]);
-// True while a client-side fetch is actively streaming a response.
-// Lives in the store (not a component) so it survives the new-chat → /chat/<id>
-// navigation; the polling $effect uses it to avoid clobbering an in-flight stream.
 let streaming = $state(false);
+
+// Pagination for the Others list (auth users only).
+let othersHasMore = $state(false);
+let othersLoadingMore = $state(false);
+let othersCursor: string | null = null;
+
+// The "today" boundary in ms since epoch — local midnight, captured at load
+// time. We don't recompute on every render; if the user crosses midnight in a
+// session, they'll need to refresh to re-bucket.
+let todayBoundaryMs = 0;
+
+function computeTodayBoundary(): number {
+	const d = new Date();
+	d.setHours(0, 0, 0, 0);
+	return d.getTime();
+}
 
 // If Supabase DB queries fail, stop trying and use localStorage
 let supabaseAvailable = true;
@@ -83,8 +101,11 @@ function markSupabaseUnavailable(err: unknown) {
 // ── Store ────────────────────────────────────────────────────────
 
 export const chatStore = {
-	get chats() {
-		return chats;
+	get todayChats() {
+		return todayChats;
+	},
+	get otherChats() {
+		return otherChats;
 	},
 	get activeChat() {
 		return activeChat;
@@ -109,72 +130,165 @@ export const chatStore = {
 		return messages[messages.length - 1];
 	},
 
+	get othersHasMore() {
+		return othersHasMore;
+	},
+	get othersLoadingMore() {
+		return othersLoadingMore;
+	},
+
 	async loadChats() {
+		// Reset state on every fresh load (sign-in, sign-out, initial mount).
+		todayChats = [];
+		otherChats = [];
+		othersCursor = null;
+		othersHasMore = false;
+		todayBoundaryMs = computeTodayBoundary();
+		const todayIso = new Date(todayBoundaryMs).toISOString();
+
 		if (useSupabase()) {
 			try {
-				const { data, error } = await supabase
-					.from('chats')
-					.select('*')
-					.order('updated_at', { ascending: false })
-					.limit(50);
-				if (error) throw error;
-				chats = data?.map(mapChatRow) ?? [];
+				// Fetch today's chats and the first page of older chats in parallel.
+				const [todayRes, othersRes] = await Promise.all([
+					supabase
+						.from('chats')
+						.select('*')
+						.gte('updated_at', todayIso)
+						.order('updated_at', { ascending: false }),
+					supabase
+						.from('chats')
+						.select('*')
+						.lt('updated_at', todayIso)
+						.order('updated_at', { ascending: false })
+						.limit(PAGE_SIZE),
+				]);
+				if (todayRes.error) throw todayRes.error;
+				if (othersRes.error) throw othersRes.error;
+
+				todayChats = (todayRes.data ?? []).map(mapChatRow);
+				const otherRows = othersRes.data ?? [];
+				otherChats = otherRows.map(mapChatRow);
+				if (otherRows.length === PAGE_SIZE) {
+					othersCursor = otherRows[otherRows.length - 1].updated_at as string;
+					othersHasMore = true;
+				}
 				return;
 			} catch (err) {
 				markSupabaseUnavailable(err);
 			}
 		}
 		{
-			const local = loadFromLocalStorage();
-			chats = local.map(({ messages: _, ...chat }) => chat);
+			// Guests load all of localStorage at once and split locally.
+			const local = loadFromLocalStorage().map(({ messages: _, ...chat }) => chat);
+			todayChats = local.filter((c) => new Date(c.updatedAt).getTime() >= todayBoundaryMs);
+			otherChats = local.filter((c) => new Date(c.updatedAt).getTime() < todayBoundaryMs);
 		}
 	},
 
-	async createChat(
-		modelId?: string,
-		companyId?: string
-	): Promise<string> {
-		const now = new Date().toISOString();
+	/** Append the next page of older chats. No-op for guests. */
+	async loadMoreOtherChats() {
+		if (othersLoadingMore || !othersHasMore || !othersCursor || !useSupabase()) return;
+		othersLoadingMore = true;
+		try {
+			const { data, error } = await supabase
+				.from('chats')
+				.select('*')
+				.lt('updated_at', othersCursor)
+				.order('updated_at', { ascending: false })
+				.limit(PAGE_SIZE);
+			if (error) throw error;
+			const rows = data ?? [];
+			if (rows.length > 0) {
+				const mapped = rows.map(mapChatRow);
+				otherChats = [...otherChats, ...mapped];
+				othersCursor = rows[rows.length - 1].updated_at as string;
+			}
+			othersHasMore = rows.length === PAGE_SIZE;
+		} catch (err) {
+			console.error('[chats] loadMoreOtherChats failed:', err);
+			othersHasMore = false;
+		} finally {
+			othersLoadingMore = false;
+		}
+	},
+
+	/**
+	 * Server-side title search. Returns up to 20 matches without touching the
+	 * main `chats` list. For guests, falls back to a localStorage filter.
+	 */
+	async searchChats(query: string): Promise<Chat[]> {
+		const q = query.trim();
+		if (!q) return [];
 
 		if (useSupabase()) {
 			try {
 				const { data, error } = await supabase
 					.from('chats')
-					.insert({
-						user_id: authStore.user!.id,
-						title: 'New Chat',
-						model_id: modelId,
-						company_id: companyId,
-					})
-					.select()
-					.single();
-
-				if (error || !data) throw error;
-				const chat = mapChatRow(data);
-				chats = [chat, ...chats];
-				activeChat = chat;
-				return chat.id;
+					.select('*')
+					.ilike('title', `%${q}%`)
+					.order('updated_at', { ascending: false })
+					.limit(20);
+				if (error) throw error;
+				return data?.map(mapChatRow) ?? [];
 			} catch (err) {
-				markSupabaseUnavailable(err);
+				console.error('[chats] searchChats failed:', err);
+				return [];
 			}
 		}
 
-		{
-			const chat: Chat = {
-				id: crypto.randomUUID(),
-				title: 'New Chat',
-				modelId,
-				companyId,
-				createdAt: now,
-				updatedAt: now,
-			};
+		const lower = q.toLowerCase();
+		return loadFromLocalStorage()
+			.filter((c) => c.title.toLowerCase().includes(lower))
+			.slice(0, 20)
+			.map(({ messages: _, ...chat }) => chat);
+	},
+
+	/**
+	 * Optimistic chat creation. Generates the id client-side, immediately
+	 * prepends to `todayChats` (so the sidebar updates instantly), then fires
+	 * the backend insert without awaiting it. The user-supplied chat id is
+	 * passed to Supabase so the DB row uses the same id we already showed.
+	 */
+	async createChat(modelId?: string, companyId?: string): Promise<string> {
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+
+		const chat: Chat = {
+			id,
+			title: 'New Chat',
+			modelId,
+			companyId,
+			createdAt: now,
+			updatedAt: now,
+		};
+
+		// Optimistic UI update: sidebar reflects the new chat immediately.
+		todayChats = [chat, ...todayChats];
+		activeChat = chat;
+
+		// Persist in the background. Don't await — caller uses the id right away.
+		if (useSupabase()) {
+			supabase
+				.from('chats')
+				.insert({
+					id,
+					user_id: authStore.user!.id,
+					title: 'New Chat',
+					model_id: modelId,
+					company_id: companyId,
+				})
+				.then(({ error }) => {
+					if (error) {
+						console.error('[chats] createChat backend insert failed:', error);
+					}
+				});
+		} else {
 			const all = loadFromLocalStorage();
 			all.unshift({ ...chat, messages: [] });
 			saveToLocalStorage(all);
-			chats = [chat, ...chats];
-			activeChat = chat;
-			return chat.id;
 		}
+
+		return id;
 	},
 
 	async loadChat(chatId: string) {
@@ -266,8 +380,10 @@ export const chatStore = {
 				chat.title = title;
 			});
 		}
-		const chat = chats.find((c) => c.id === chatId);
-		if (chat) chat.title = title;
+		const inToday = todayChats.find((c) => c.id === chatId);
+		if (inToday) inToday.title = title;
+		const inOthers = otherChats.find((c) => c.id === chatId);
+		if (inOthers) inOthers.title = title;
 		if (activeChat?.id === chatId) activeChat.title = title;
 	},
 
@@ -282,7 +398,8 @@ export const chatStore = {
 			const all = loadFromLocalStorage().filter((c) => c.id !== chatId);
 			saveToLocalStorage(all);
 		}
-		chats = chats.filter((c) => c.id !== chatId);
+		todayChats = todayChats.filter((c) => c.id !== chatId);
+		otherChats = otherChats.filter((c) => c.id !== chatId);
 		if (activeChat?.id === chatId) {
 			activeChat = null;
 			messages = [];
