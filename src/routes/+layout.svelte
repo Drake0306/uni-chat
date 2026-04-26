@@ -2,6 +2,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import '../app.css';
 	import AppSidebar from '$lib/components/app-sidebar.svelte';
+	import SyncPromptDialog from '$lib/components/sync-prompt-dialog.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 
 	let { children } = $props();
@@ -18,3 +19,5 @@
 		{@render children()}
 	</Sidebar.SidebarInset>
 </Sidebar.SidebarProvider>
+
+<SyncPromptDialog />

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import MessageSquareIcon from '@lucide/svelte/icons/message-square';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -21,7 +23,9 @@
 
 	const isMac = browser && navigator.platform.toUpperCase().includes('MAC');
 
-	// Load chats after auth resolves
+	// Load chats once after auth resolves. Sign-in/out cleanup is handled
+	// explicitly in the dropdown handlers below — keeping it imperative avoids
+	// reactive feedback loops with the Supabase auth callback.
 	let chatsLoaded = false;
 	$effect(() => {
 		if (!authStore.loading && !chatsLoaded) {
@@ -29,6 +33,14 @@
 			chatStore.loadChats();
 		}
 	});
+
+	async function handleSignOut() {
+		const wasOnChat = page.url.pathname.startsWith('/chat/');
+		await authStore.signOut();
+		chatStore.clearActive();
+		await chatStore.loadChats();
+		if (wasOnChat) goto('/', { replaceState: true });
+	}
 
 	onMount(() => {
 		function handleKeydown(e: KeyboardEvent) {
@@ -43,11 +55,17 @@
 
 	function selectChat(chat: { id: string }) {
 		commandStore.open = false;
-		chatStore.loadChat(chat.id);
+		goto(`/chat/${chat.id}`);
 	}
 
 	function newChat() {
-		chatStore.clearActive();
+		goto('/');
+	}
+
+	async function deleteChat(chatId: string) {
+		const wasActive = page.url.pathname === `/chat/${chatId}`;
+		await chatStore.deleteChat(chatId);
+		if (wasActive) goto('/', { replaceState: true });
 	}
 </script>
 
@@ -99,18 +117,20 @@
 			<Sidebar.SidebarGroupContent>
 				<Sidebar.SidebarMenu>
 					{#each chatStore.chats as chat}
+						{@const isActive = page.url.pathname === `/chat/${chat.id}`}
 						<Sidebar.SidebarMenuItem>
-							<Sidebar.SidebarMenuButton
-								class={chatStore.activeChat?.id === chat.id ? 'bg-sidebar-accent' : ''}
-								onclick={() => selectChat(chat)}
-							>
-								<MessageSquareIcon class="size-4" />
-								<span>{chat.title}</span>
+							<Sidebar.SidebarMenuButton class={isActive ? 'bg-sidebar-accent' : ''}>
+								{#snippet child({ props })}
+									<a {...props} href="/chat/{chat.id}">
+										<MessageSquareIcon class="size-4" />
+										<span>{chat.title}</span>
+									</a>
+								{/snippet}
 							</Sidebar.SidebarMenuButton>
 							<Sidebar.SidebarMenuAction>
 								<button
 									class="flex size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/menu-item:opacity-100"
-									onclick={() => chatStore.deleteChat(chat.id)}
+									onclick={() => deleteChat(chat.id)}
 								>
 									<TrashIcon class="size-3" />
 								</button>
@@ -161,7 +181,7 @@
 							Settings
 						</DropdownMenu.Item>
 						<DropdownMenu.Separator />
-						<DropdownMenu.Item onSelect={() => authStore.signOut()} variant="destructive">
+						<DropdownMenu.Item onSelect={handleSignOut} variant="destructive">
 							<LogOutIcon class="mr-2 size-4" />
 							Sign out
 						</DropdownMenu.Item>

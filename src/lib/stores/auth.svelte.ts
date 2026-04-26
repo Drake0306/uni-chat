@@ -5,6 +5,7 @@ let user = $state<User | null>(null);
 let session = $state<Session | null>(null);
 let loading = $state(true);
 let tier = $state<'guest' | 'free' | 'pro' | 'max'>('guest');
+let pendingSyncDecision = $state(false);
 
 // Single auth listener — handles INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED
 // IMPORTANT: This callback is awaited by _notifyAllSubscribers inside _initialize().
@@ -36,6 +37,21 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 	} else {
 		tier = 'guest';
 	}
+
+	// Synchronous-only check: if a guest with localStorage chats just signed in,
+	// flag the sync prompt. Reading localStorage is sync; no Supabase calls here
+	// (would re-trigger the deadlock described above).
+	if (_event === 'SIGNED_IN' && user && typeof window !== 'undefined') {
+		try {
+			const raw = localStorage.getItem('unichat_chats');
+			const arr = raw ? JSON.parse(raw) : [];
+			if (Array.isArray(arr) && arr.length > 0) {
+				pendingSyncDecision = true;
+			}
+		} catch {
+			// Corrupt JSON — ignore, don't prompt
+		}
+	}
 });
 
 export const authStore = {
@@ -53,6 +69,12 @@ export const authStore = {
 	},
 	get isAuthenticated() {
 		return !!user;
+	},
+	get pendingSyncDecision() {
+		return pendingSyncDecision;
+	},
+	clearSyncDecision() {
+		pendingSyncDecision = false;
 	},
 
 	get displayName() {
