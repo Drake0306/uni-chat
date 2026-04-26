@@ -3,8 +3,8 @@
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import MessageSquareIcon from '@lucide/svelte/icons/message-square';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import type { Chat } from '$lib/types.js';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -67,7 +67,51 @@
 		await chatStore.deleteChat(chatId);
 		if (wasActive) goto('/', { replaceState: true });
 	}
+
+	// Group chats into Pinned / Today / Others. "Today" boundary is local midnight.
+	const groupedChats = $derived.by(() => {
+		const todayStart = new Date();
+		todayStart.setHours(0, 0, 0, 0);
+		const todayMs = todayStart.getTime();
+		const pinned: Chat[] = [];
+		const today: Chat[] = [];
+		const others: Chat[] = [];
+		for (const chat of chatStore.chats) {
+			if (chat.pinned) {
+				pinned.push(chat);
+				continue;
+			}
+			const updatedMs = new Date(chat.updatedAt).getTime();
+			if (updatedMs >= todayMs) today.push(chat);
+			else others.push(chat);
+		}
+		return { pinned, today, others };
+	});
+
+	const hasAnyChats = $derived(chatStore.chats.length > 0);
 </script>
+
+{#snippet chatRow(chat: Chat)}
+	{@const isActive = page.url.pathname === `/chat/${chat.id}`}
+	<Sidebar.SidebarMenuItem>
+		<Sidebar.SidebarMenuButton isActive={isActive} class="pl-5">
+			{#snippet child({ props })}
+				<a {...props} href="/chat/{chat.id}">
+					<span>{chat.title}</span>
+				</a>
+			{/snippet}
+		</Sidebar.SidebarMenuButton>
+		<Sidebar.SidebarMenuAction showOnHover>
+			<button
+				class="flex size-full items-center justify-center text-muted-foreground hover:text-destructive"
+				onclick={() => deleteChat(chat.id)}
+				aria-label="Delete chat"
+			>
+				<TrashIcon class="size-3.5" />
+			</button>
+		</Sidebar.SidebarMenuAction>
+	</Sidebar.SidebarMenuItem>
+{/snippet}
 
 <Sidebar.Sidebar collapsible="offcanvas">
 	<Sidebar.SidebarHeader>
@@ -112,39 +156,50 @@
 
 	<!-- Chat history -->
 	<Sidebar.SidebarContent>
-		<Sidebar.SidebarGroup>
-			<Sidebar.SidebarGroupLabel>Recent</Sidebar.SidebarGroupLabel>
-			<Sidebar.SidebarGroupContent>
-				<Sidebar.SidebarMenu>
-					{#each chatStore.chats as chat}
-						{@const isActive = page.url.pathname === `/chat/${chat.id}`}
-						<Sidebar.SidebarMenuItem>
-							<Sidebar.SidebarMenuButton class={isActive ? 'bg-sidebar-accent' : ''}>
-								{#snippet child({ props })}
-									<a {...props} href="/chat/{chat.id}">
-										<MessageSquareIcon class="size-4" />
-										<span>{chat.title}</span>
-									</a>
-								{/snippet}
-							</Sidebar.SidebarMenuButton>
-							<Sidebar.SidebarMenuAction>
-								<button
-									class="flex size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/menu-item:opacity-100"
-									onclick={() => deleteChat(chat.id)}
-								>
-									<TrashIcon class="size-3" />
-								</button>
-							</Sidebar.SidebarMenuAction>
-						</Sidebar.SidebarMenuItem>
-					{/each}
-					{#if chatStore.chats.length === 0}
-						<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-							No conversations yet
-						</div>
-					{/if}
-				</Sidebar.SidebarMenu>
-			</Sidebar.SidebarGroupContent>
-		</Sidebar.SidebarGroup>
+		{#if groupedChats.pinned.length > 0}
+			<Sidebar.SidebarGroup>
+				<Sidebar.SidebarGroupLabel>Pinned</Sidebar.SidebarGroupLabel>
+				<Sidebar.SidebarGroupContent>
+					<Sidebar.SidebarMenu>
+						{#each groupedChats.pinned as chat (chat.id)}
+							{@render chatRow(chat)}
+						{/each}
+					</Sidebar.SidebarMenu>
+				</Sidebar.SidebarGroupContent>
+			</Sidebar.SidebarGroup>
+		{/if}
+
+		{#if groupedChats.today.length > 0}
+			<Sidebar.SidebarGroup>
+				<Sidebar.SidebarGroupLabel>Today</Sidebar.SidebarGroupLabel>
+				<Sidebar.SidebarGroupContent>
+					<Sidebar.SidebarMenu>
+						{#each groupedChats.today as chat (chat.id)}
+							{@render chatRow(chat)}
+						{/each}
+					</Sidebar.SidebarMenu>
+				</Sidebar.SidebarGroupContent>
+			</Sidebar.SidebarGroup>
+		{/if}
+
+		{#if groupedChats.others.length > 0}
+			<Sidebar.SidebarGroup>
+				<Sidebar.SidebarGroupLabel>Others</Sidebar.SidebarGroupLabel>
+				<Sidebar.SidebarGroupContent>
+					<Sidebar.SidebarMenu>
+						{#each groupedChats.others as chat (chat.id)}
+							{@render chatRow(chat)}
+						{/each}
+					</Sidebar.SidebarMenu>
+				</Sidebar.SidebarGroupContent>
+			</Sidebar.SidebarGroup>
+		{/if}
+
+		{#if !hasAnyChats}
+			<div class="px-3 py-4 text-center text-sm text-muted-foreground">
+				No conversations yet
+			</div>
+		{/if}
 	</Sidebar.SidebarContent>
 
 	<!-- Footer: Auth -->
@@ -211,7 +266,6 @@
 		<Command.Group heading="Recent Chats">
 			{#each chatStore.chats as chat}
 				<Command.Item onSelect={() => selectChat(chat)} class="py-3 text-sm">
-					<MessageSquareIcon class="mr-2 size-4" />
 					<span>{chat.title}</span>
 				</Command.Item>
 			{/each}
