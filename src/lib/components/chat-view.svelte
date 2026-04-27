@@ -438,10 +438,12 @@
 	}
 </script>
 
-<div class="flex h-svh flex-col">
-	<!-- Floating toolbar (slides in from left when sidebar hides) -->
-	{#if !sidebar.open}
-		<div class="floating-toolbar absolute left-3 top-3 z-20">
+<div class="flex h-dvh flex-col sm:h-svh">
+	<!-- Floating toolbar (slides in from left when sidebar hides). On mobile
+	     it must always be visible — the desktop sidebar is collapsed off-canvas
+	     and the only way to open the mobile sheet is via this trigger. -->
+	{#if !sidebar.open || sidebar.isMobile}
+		<div class="floating-toolbar absolute left-3 top-4 z-20 sm:top-3">
 			<div class="flex items-center gap-0.5 rounded-xl bg-sidebar p-1 shadow-md ring-1 ring-sidebar-border">
 				<button
 					class="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97]"
@@ -469,7 +471,7 @@
 	{/if}
 
 	<!-- Right floating toolbar -->
-	<div class="floating-toolbar-right absolute right-3 top-3 z-20">
+	<div class="floating-toolbar-right absolute right-3 top-4 z-20 sm:top-3">
 		<div class="flex items-center gap-0.5 rounded-xl bg-sidebar p-1 shadow-md ring-1 ring-sidebar-border">
 			<!-- Temporary chat toggle -->
 			<Tooltip.Root>
@@ -554,15 +556,15 @@
 			<div class="flex h-full items-center justify-center pb-32">
 				<div class="w-full max-w-2xl px-4">
 					{#if tempChatEnabled}
-						<h2 class="flex items-center gap-2.5 text-3xl font-semibold">
-							<MessageSquareDashedIcon class="size-7 text-muted-foreground" />
+						<h2 class="flex items-center gap-2 text-2xl font-semibold sm:gap-2.5 sm:text-3xl">
+							<MessageSquareDashedIcon class="size-6 text-muted-foreground sm:size-7" />
 							Temporary chat
 						</h2>
 						<p class="mt-2 text-sm text-muted-foreground">
 							This conversation won't be saved anywhere. Refreshing the page will clear it.
 						</p>
 					{:else}
-						<h2 class="text-3xl font-semibold">How can I help you?</h2>
+						<h2 class="text-2xl font-semibold sm:text-3xl">How can I help you?</h2>
 					{/if}
 
 					<!-- Category tabs -->
@@ -594,7 +596,7 @@
 					<div class="mt-5">
 						{#each suggestions[activeCategory] as prompt}
 							<button
-								class="suggestion-item flex w-full items-center border-b border-border px-1 py-3.5 text-left text-base text-muted-foreground transition-all hover:text-foreground"
+								class="suggestion-item flex w-full items-center border-b border-border px-1 py-3 text-left text-sm text-muted-foreground transition-all hover:text-foreground sm:py-3.5 sm:text-base"
 								onclick={() => useSuggestion(prompt)}
 							>
 								{prompt}
@@ -668,8 +670,8 @@
 	</div>
 
 	<!-- Composer -->
-	<div class="px-4 pb-4">
-		<div class="mx-auto max-w-3xl rounded-2xl bg-muted/30 p-3">
+	<div class="px-2 pb-3 sm:px-4 sm:pb-4">
+		<div class="mx-auto max-w-3xl rounded-2xl bg-muted/30 p-2 sm:p-3">
 			<!-- Hidden file picker. Triggered by the "Attach" button below. -->
 			<input
 				type="file"
@@ -720,15 +722,15 @@
 								{#snippet child({ props })}
 									<button
 										{...props}
-										class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+										class="capability-toggle flex items-center gap-1 rounded-full px-2 py-1.5 text-sm font-semibold transition-all sm:gap-1.5 sm:px-2.5
 											{thinkingActive
 												? 'bg-violet-500/15 text-violet-600 ring-1 ring-violet-500/30'
 												: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
 										title="Reasoning effort"
 									>
 										<BrainIcon class="size-4" />
-										<span class="capitalize">{effort}</span>
-										<ChevronDownIcon class="size-3" />
+										<span class="hidden capitalize sm:inline">{effort}</span>
+										<ChevronDownIcon class="hidden size-3 sm:inline" />
 									</button>
 								{/snippet}
 							</DropdownMenu.Trigger>
@@ -775,7 +777,7 @@
 					     automatically when an image is part of the message — no toggle needed. -->
 					{#if currentModel?.capabilities.files}
 						<button
-							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+							class="capability-toggle flex items-center gap-1 rounded-full px-2 py-1.5 text-sm font-semibold transition-all sm:gap-1.5 sm:px-2.5
 								{isGuest
 									? 'cursor-not-allowed text-muted-foreground/50'
 									: attachedFiles.length > 0
@@ -790,9 +792,12 @@
 							{:else}
 								<PaperclipIcon class="size-4" />
 							{/if}
-							<span>
+							<span class="hidden sm:inline">
 								Attach{!isGuest && attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
 							</span>
+							{#if !isGuest && attachedFiles.length > 0}
+								<span class="sm:hidden">({attachedFiles.length})</span>
+							{/if}
 						</button>
 					{/if}
 					<!-- Web Search is always available for signed-in users. Native-
@@ -801,7 +806,7 @@
 					     into the request — wired in a follow-up. Guests see the
 					     button locked. -->
 					<button
-						class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+						class="capability-toggle flex items-center gap-1 rounded-full px-2 py-1.5 text-sm font-semibold transition-all sm:gap-1.5 sm:px-2.5
 							{isGuest
 								? 'cursor-not-allowed text-muted-foreground/50'
 								: webSearchEnabled
@@ -816,7 +821,7 @@
 						{:else}
 							<GlobeIcon class="size-4" />
 						{/if}
-						<span>Search</span>
+						<span class="hidden sm:inline">Search</span>
 					</button>
 				</div>
 

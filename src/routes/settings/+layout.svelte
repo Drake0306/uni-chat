@@ -6,6 +6,8 @@
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import MonitorIcon from '@lucide/svelte/icons/monitor';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
 
@@ -81,6 +83,31 @@
 		authStore.tier ? `${authStore.tier[0].toUpperCase()}${authStore.tier.slice(1)} Plan` : ''
 	);
 	const initials = $derived(authStore.displayName?.[0]?.toUpperCase() ?? '?');
+
+	// ── Mobile tab-strip scroll affordances ─────────────────
+	// Show chevron indicators on the left/right of the tab strip when there
+	// are tabs cut off in that direction. Hidden on desktop (where the strip
+	// wraps to multiple lines and never overflows horizontally).
+	let tabStripEl: HTMLDivElement | undefined = $state();
+	let canScrollLeft = $state(false);
+	let canScrollRight = $state(false);
+
+	function checkTabScroll() {
+		if (!tabStripEl) return;
+		// 4px buffer absorbs sub-pixel rounding so the indicators don't flicker
+		// at the extremes.
+		canScrollLeft = tabStripEl.scrollLeft > 4;
+		canScrollRight =
+			tabStripEl.scrollLeft + tabStripEl.clientWidth < tabStripEl.scrollWidth - 4;
+	}
+
+	$effect(() => {
+		if (!tabStripEl) return;
+		checkTabScroll();
+		const observer = new ResizeObserver(() => checkTabScroll());
+		observer.observe(tabStripEl);
+		return () => observer.disconnect();
+	});
 </script>
 
 {#if !authStore.loading && authStore.isAuthenticated}
@@ -178,20 +205,49 @@
 						</div>
 					</div>
 
-					<!-- Tab strip -->
-					<div class="mb-8 flex flex-wrap items-center gap-1.5">
-						{#each tabs as tab (tab.id)}
-							{@const isActive = activeTab === tab.id}
-							<button
-								class="rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-all
-									{isActive
-									? 'border border-border bg-card text-foreground shadow-sm'
-									: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-								onclick={() => goToTab(tab.id)}
+					<!-- Tab strip. Mobile: horizontal scroll, single row, no wrap, with
+					     fade + chevron indicators that appear only when the content
+					     is actually cut off in that direction. Desktop: flex-wrap
+					     as before, indicators are hidden. -->
+					<div class="relative mb-8">
+						{#if canScrollLeft}
+							<div
+								class="pointer-events-none absolute inset-y-0 left-0 z-10 flex w-10 items-center bg-gradient-to-r from-background to-transparent sm:hidden"
+								aria-hidden="true"
 							>
-								{tab.label}
-							</button>
-						{/each}
+								<div class="flex size-7 items-center justify-center rounded-full bg-accent shadow-md ring-1 ring-border">
+									<ChevronLeftIcon class="size-4 text-foreground" />
+								</div>
+							</div>
+						{/if}
+						{#if canScrollRight}
+							<div
+								class="pointer-events-none absolute inset-y-0 right-0 z-10 flex w-10 items-center justify-end bg-gradient-to-l from-background to-transparent sm:hidden"
+								aria-hidden="true"
+							>
+								<div class="flex size-7 items-center justify-center rounded-full bg-accent shadow-md ring-1 ring-border">
+									<ChevronRightIcon class="size-4 text-foreground" />
+								</div>
+							</div>
+						{/if}
+						<div
+							class="flex flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-none sm:flex-wrap sm:overflow-x-visible"
+							bind:this={tabStripEl}
+							onscroll={checkTabScroll}
+						>
+							{#each tabs as tab (tab.id)}
+								{@const isActive = activeTab === tab.id}
+								<button
+									class="shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold transition-all sm:px-3.5
+										{isActive
+										? 'border border-border bg-card text-foreground shadow-sm'
+										: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+									onclick={() => goToTab(tab.id)}
+								>
+									{tab.label}
+								</button>
+							{/each}
+						</div>
 					</div>
 
 					{@render children()}

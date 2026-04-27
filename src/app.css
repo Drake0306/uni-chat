@@ -130,3 +130,35 @@
 		@apply font-sans;
 	}
 }
+
+/* Hide scrollbars for elements that scroll programmatically (e.g., the
+ * mobile settings tab strip and the model-selector company sidebar).
+ * Scope is global so any component can use the .scrollbar-none class. */
+.scrollbar-none {
+	-ms-overflow-style: none;
+	scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+	display: none;
+}
+
+/* Mobile-only: pin the chat layout to the dynamic viewport so the body
+ * isn't scrollable past the chat UI. The sidebar-provider wrapper is
+ * clamped exactly to 100dvh (top *and* bottom), with overflow:hidden so
+ * any minor sub-pixel rounding or transient address-bar transition can't
+ * leak extra scroll height onto the body. overscroll-behavior:none on the
+ * page kills iOS Safari's rubber-band bounce as well.
+ *
+ * Settings routes don't use this wrapper (the +layout.svelte short-circuits
+ * the sidebar for /settings), so this doesn't affect their long-page scroll. */
+@media (max-width: 639px) {
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+	.group\/sidebar-wrapper {
+		min-height: 100dvh;
+		max-height: 100dvh;
+		overflow: hidden;
+	}
+}

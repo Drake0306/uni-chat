@@ -151,7 +151,7 @@
 				{...props}
 				class="inline-flex flex-nowrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-all hover:bg-accent hover:shadow-sm active:scale-[0.98]"
 			>
-				<span class="whitespace-nowrap text-sm font-semibold">{selected.modelName}</span>
+				<span class="max-w-32 truncate whitespace-nowrap text-sm font-semibold sm:max-w-none">{selected.modelName}</span>
 				{#if open}
 					<ChevronUpIcon class="size-4 shrink-0 text-muted-foreground" />
 				{:else}
@@ -163,7 +163,7 @@
 	<Popover.Content
 		align="start"
 		side="top"
-		class="w-180 p-0"
+		class="w-[95vw] max-w-180 p-0 sm:w-180"
 		sideOffset={12}
 	>
 		<div class="flex flex-col" style="height: {expanded ? '540px' : '320px'}; transition: height 0.2s ease;">
@@ -274,7 +274,7 @@
 										<LockIcon class="size-3 text-muted-foreground" />
 									{/if}
 								</div>
-								<div class="grid grid-cols-2 gap-2.5">
+								<div class="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
 									{#each company.models as model}
 										{@const disabled = !model.enabled}
 										<button
@@ -327,7 +327,7 @@
 							</div>
 						{/if}
 
-						<div class="grid grid-cols-2 gap-2.5">
+						<div class="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
 							{#each filteredModels() as model}
 								{@const disabled = !model.enabled}
 								<button
