@@ -611,7 +611,7 @@
 			<Textarea
 				bind:value={input}
 				placeholder="Send a message..."
-				class="min-h-[100px] max-h-[200px] resize-none border-0 bg-transparent px-1 py-2 text-base shadow-none focus-visible:ring-0 md:text-base"
+				class="max-h-50 min-h-25 resize-none border-0 bg-transparent px-1 py-2 text-base shadow-none focus-visible:ring-0 md:text-base"
 				rows={3}
 				onkeydown={handleKeydown}
 			/>

@@ -642,7 +642,7 @@
 		placeholder="Search conversations..."
 		class="h-14 text-base"
 	/>
-	<Command.List class="max-h-[480px]">
+	<Command.List class="max-h-120">
 		{#if searchQuery.trim()}
 			{#if searchLoading}
 				<div class="px-4 py-6 text-center text-sm text-muted-foreground">Searching…</div>

@@ -139,7 +139,7 @@
 	<Popover.Content
 		align="start"
 		side="top"
-		class="w-[720px] p-0"
+		class="w-180 p-0"
 		sideOffset={12}
 	>
 		<div class="flex flex-col" style="height: {expanded ? '540px' : '320px'}; transition: height 0.2s ease;">
@@ -179,7 +179,7 @@
 			<!-- Body: sidebar + models -->
 			<div class="flex flex-1 overflow-hidden">
 				<!-- Company sidebar -->
-				<div class="relative flex w-[72px] flex-col border-r bg-muted/10">
+				<div class="relative flex w-18 flex-col border-r bg-muted/10">
 					{#if canScrollUp}
 						<div class="absolute inset-x-0 top-0 z-10 flex justify-center py-1">
 							<div class="flex size-6 items-center justify-center rounded-full bg-accent shadow-md">
