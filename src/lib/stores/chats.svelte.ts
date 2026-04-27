@@ -15,6 +15,10 @@ let otherChats = $state<Chat[]>([]);
 let activeChat = $state<Chat | null>(null);
 let messages = $state<Message[]>([]);
 let streaming = $state(false);
+// True until the first loadChats() resolves; flipped on for the brief window
+// of any subsequent reload (sign-in/out) so the sidebar shows its blur-fade
+// placeholder instead of popping in.
+let initialLoading = $state(true);
 
 // Pagination for the Others list (auth users only).
 let othersHasMore = $state(false);
@@ -141,6 +145,9 @@ export const chatStore = {
 	get othersLoadingMore() {
 		return othersLoadingMore;
 	},
+	get initialLoading() {
+		return initialLoading;
+	},
 
 	async loadChats() {
 		// Reset state on every fresh load (sign-in, sign-out, initial mount).
@@ -151,55 +158,60 @@ export const chatStore = {
 		othersHasMore = false;
 		todayBoundaryMs = computeTodayBoundary();
 		const todayIso = new Date(todayBoundaryMs).toISOString();
+		initialLoading = true;
 
-		if (useSupabase()) {
-			try {
-				// Three parallel queries: pinned (any date), today-unpinned, and
-				// the first page of older-unpinned.
-				const [pinnedRes, todayRes, othersRes] = await Promise.all([
-					supabase
-						.from('chats')
-						.select('*')
-						.eq('pinned', true)
-						.order('updated_at', { ascending: false }),
-					supabase
-						.from('chats')
-						.select('*')
-						.eq('pinned', false)
-						.gte('updated_at', todayIso)
-						.order('updated_at', { ascending: false }),
-					supabase
-						.from('chats')
-						.select('*')
-						.eq('pinned', false)
-						.lt('updated_at', todayIso)
-						.order('updated_at', { ascending: false })
-						.limit(PAGE_SIZE),
-				]);
-				if (pinnedRes.error) throw pinnedRes.error;
-				if (todayRes.error) throw todayRes.error;
-				if (othersRes.error) throw othersRes.error;
+		try {
+			if (useSupabase()) {
+				try {
+					// Three parallel queries: pinned (any date), today-unpinned, and
+					// the first page of older-unpinned.
+					const [pinnedRes, todayRes, othersRes] = await Promise.all([
+						supabase
+							.from('chats')
+							.select('*')
+							.eq('pinned', true)
+							.order('updated_at', { ascending: false }),
+						supabase
+							.from('chats')
+							.select('*')
+							.eq('pinned', false)
+							.gte('updated_at', todayIso)
+							.order('updated_at', { ascending: false }),
+						supabase
+							.from('chats')
+							.select('*')
+							.eq('pinned', false)
+							.lt('updated_at', todayIso)
+							.order('updated_at', { ascending: false })
+							.limit(PAGE_SIZE),
+					]);
+					if (pinnedRes.error) throw pinnedRes.error;
+					if (todayRes.error) throw todayRes.error;
+					if (othersRes.error) throw othersRes.error;
 
-				pinnedChats = (pinnedRes.data ?? []).map(mapChatRow);
-				todayChats = (todayRes.data ?? []).map(mapChatRow);
-				const otherRows = othersRes.data ?? [];
-				otherChats = otherRows.map(mapChatRow);
-				if (otherRows.length === PAGE_SIZE) {
-					othersCursor = otherRows[otherRows.length - 1].updated_at as string;
-					othersHasMore = true;
+					pinnedChats = (pinnedRes.data ?? []).map(mapChatRow);
+					todayChats = (todayRes.data ?? []).map(mapChatRow);
+					const otherRows = othersRes.data ?? [];
+					otherChats = otherRows.map(mapChatRow);
+					if (otherRows.length === PAGE_SIZE) {
+						othersCursor = otherRows[otherRows.length - 1].updated_at as string;
+						othersHasMore = true;
+					}
+					return;
+				} catch (err) {
+					markSupabaseUnavailable(err);
 				}
-				return;
-			} catch (err) {
-				markSupabaseUnavailable(err);
 			}
-		}
-		{
-			// Guests load all of localStorage at once and split locally.
-			const local = loadFromLocalStorage().map(({ messages: _, ...chat }) => chat);
-			pinnedChats = local.filter((c) => c.pinned);
-			const unpinned = local.filter((c) => !c.pinned);
-			todayChats = unpinned.filter((c) => new Date(c.updatedAt).getTime() >= todayBoundaryMs);
-			otherChats = unpinned.filter((c) => new Date(c.updatedAt).getTime() < todayBoundaryMs);
+			{
+				// Guests load all of localStorage at once and split locally.
+				const local = loadFromLocalStorage().map(({ messages: _, ...chat }) => chat);
+				pinnedChats = local.filter((c) => c.pinned);
+				const unpinned = local.filter((c) => !c.pinned);
+				todayChats = unpinned.filter((c) => new Date(c.updatedAt).getTime() >= todayBoundaryMs);
+				otherChats = unpinned.filter((c) => new Date(c.updatedAt).getTime() < todayBoundaryMs);
+			}
+		} finally {
+			initialLoading = false;
 		}
 	},
 

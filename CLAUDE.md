@@ -6,9 +6,11 @@ AI-powered chat application built with SvelteKit and shadcn-svelte.
 
 - **Never hallucinate, never guess.** If you don't know what something does, **read the actual code** — don't infer from naming, don't assume framework behaviors are universal. When the user reports a bug, find the bug by reading the code, not by adding "defensive" patches on top of what you think might be wrong.
 - **Don't add speculative fixes.** If you don't know the root cause, say so and ask for diagnostics (browser console, network tab, specific reproduction steps) before changing more code. Layered "this might help" patches make regressions worse.
-- **Verify before claiming done.** `npm run check` is the build truth — if it passes, the build is fine. LSP/IDE diagnostic warnings can be stale (TypeScript LSP cache issues are known in this project).
+- **Verify before claiming done.** `npm run check` is the build truth — if it passes, the build is fine. LSP/IDE diagnostic warnings can be stale (TypeScript LSP cache issues are known in this project — recurring false positives on `chatStore.todayChats`, `pinChat`, `searchChats`, etc., even when the file compiles cleanly).
 - **Read consumers before refactoring a store/util.** Always grep for every callsite of a function/property before changing its signature.
 - **For any reactive state question:** read `src/lib/stores/chats.svelte.ts` and the relevant `.svelte` component end-to-end before guessing.
+- **No auto-commits / no auto-pushes.** User runs all git commands themselves.
+- **Tailwind v4 + tailwind-merge has class-conflict edge cases.** When `cn()`-merged classes don't override base classes (e.g., positioning conflicts), bypass with a CSS rule using `:has()` selectors instead of fighting the merge order.
 
 ## Stack
 
@@ -172,3 +174,39 @@ Run SQL migrations in Supabase SQL Editor (or via CLI: `npx supabase login && np
 - **Server-side persistence limitation:** If the server process dies mid-stream (deploy, crash), the in-flight response is lost. See `docs/response-persistence.md` for the job queue upgrade path.
 
 Provider research docs are in `docs/providers/`. Full model reference table at `docs/models.md`. Setup guide at `SETUP.md`.
+
+## Model config (`src/lib/config/models.ts`)
+
+- **Every Model entry must have a `provider` field** (typed `Provider`, one of 12 values). The `PROVIDERS` map maps each provider → `{ name, icon }` for the "via [Provider]" chip in the model selector.
+- **Companies vs providers:** Companies group models in the selector (Google, Meta, Anthropic, OpenAI, …). The `provider` field tells you who hosts the inference. The same model can appear under one company with multiple provider entries (e.g., "Llama 3.3 70B" via OpenRouter AND "Llama 3.3 70B (Fast)" via Groq are two separate model entries under Meta).
+- **Adding a new model:** specify `provider`, `route` (often the same as provider), and `apiModelId` (what gets sent to the provider's API). For preview/evaluation-only models (Groq's preview tier), add a code comment flagging the limitation.
+- **Disabled models stay in config** with `enabled: false` and a comment explaining why (e.g., Mixtral 8x7B was deprecated by Groq).
+- **Adding new provider icons:** download from `https://unpkg.com/@lobehub/icons-static-svg@latest/icons/<slug>.svg` into `static/icons/`. Color variants (`<slug>-color.svg`) don't exist for all providers — fall back to mono SVGs which use `currentColor`.
+
+## Groq specifics
+
+- **Live model list:** `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"` is the canonical source. Don't trust the docs page alone; preview/deprecated models churn.
+- **Catalog is narrow:** ~9 chat LLMs total. Don't expect breadth — Groq specializes in speed.
+- **Compound (`groq/compound`, `groq/compound-mini`) is agentic.** It does web search + code execution natively. The current SSE parser in `chat-view.svelte` does NOT handle tool-call chunks — Compound output may render blank if the model invokes tools. Untested; known caveat. Plain LLMs (Llama, GPT-OSS, Qwen3-32B, Llama 4 Scout) work fine because they emit standard `delta.content`.
+- **Mixtral 8x7B is deprecated** by Groq. Entry kept with `enabled: false` for traceability; do not re-enable without confirming Groq has restored it.
+- **Preview models** (Llama 4 Scout, Qwen3 32B as of 2026-04-27) are explicitly evaluation-only per Groq's TOS — won't move to production tier with the model unchanged. OK for dev.
+
+## Common pitfalls (regressions to NOT reintroduce)
+
+- **`chatStore.createChat` MUST await the Supabase chat-row insert.** A previous "optimistic fire-and-forget" version caused `addMessage(user)` to FK-violate (chat row didn't exist yet) → user message lost on refresh, title stayed "New Chat". Optimistic UI (`todayChats = [chat, ...todayChats]`) runs synchronously *before* the await, so sidebar still updates instantly.
+- **`chatStore.updateChatTitle` MUST NOT touch `updated_at`.** Renaming/regenerating is metadata, not activity. Bumping `updated_at` would re-bucket old chats into "Today" on refresh.
+- **ChatView's load-chat `$effect` MUST track `authStore.loading`.** On fresh page loads (`/chat/<id>` directly, new tab, refresh), Supabase auth fires async after component mount. Without the `authLoading` guard, `useSupabase()` returns false → `loadChat` falls through to localStorage → not found → goto('/'). User loses the chat URL.
+- **`$effect` reactivity on store-owned arrays:** wrap reads of `chatStore.activeChat` in `untrack()` inside the route-load effect to avoid feedback loops with `createChat`.
+- **`chatStore.streaming` flag** prevents the polling effect from clobbering an in-flight stream during `goto('/chat/<id>')` navigation. Set in handleSend around the fetch.
+- **Temp chat mode skips ALL persistence:** `createChat`, `addMessage`, `updateChatTitle`, sending `chatId/messageId` in the API body (which gates server-side tee), and the localStorage save in `finally`. Refresh wipes everything.
+- **bits-ui `Command.Dialog`'s `value` prop binds to the highlighted item, NOT the input text.** To get the search query, `bind:value` on `Command.Input`, not on `Command.Dialog`. Doing it wrong causes an infinite loop because cmdk's selection state syncs back into the search query.
+- **`for...of` on a `$state` proxy inside `$derived.by` can have tracking edge cases.** Prefer plain `.filter()` / indexed `for` loops with explicit `.length` reads.
+
+## Production / TOS notes
+
+- **Free tiers (Groq Developer, OpenRouter `:free`, Gemini free tier) are dev-only.** Commercial deployment at scale violates TOS — switch to paid plans (Groq On-Demand, OpenRouter paid routes, Gemini billed) before launch. Same code, different API keys.
+- **Always verify TOS directly with the provider** before launching a paid product on top of their inference.
+
+## Pin migration (2026-04-27)
+
+`supabase/migrations/20260427120000_pin_chats.sql` adds `pinned boolean not null default false` to the `chats` table plus a composite index `(user_id, pinned, updated_at desc)`. Existing rows default to `pinned = false`. Run via `npx supabase db push`. The migration is additive — existing data and columns are untouched.

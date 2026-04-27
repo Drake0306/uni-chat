@@ -23,7 +23,6 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
-	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
@@ -263,6 +262,17 @@
 		}
 	}
 
+	// Static placeholder titles for the blur-fade loading state. Varied widths
+	// so the blurred rows don't read as a uniform stack of identical bars.
+	const placeholderTitles = [
+		'Comparing GPT-OSS vs Llama 3.3',
+		'Recipe ideas for tonight',
+		'Debugging a Svelte effect loop',
+		'Travel planning for Tokyo',
+		'Cover letter draft review',
+		'Quick algebra question',
+	];
+
 	// Two independent lists from the store. The store handles the today/older
 	// split server-side and exposes them as separate $state arrays.
 	const hasAnyChats = $derived(
@@ -330,6 +340,14 @@
 		});
 	});
 </script>
+
+{#snippet placeholderRow(title: string)}
+	<Sidebar.SidebarMenuItem>
+		<div class="flex h-9 items-center pl-5 pr-12 text-[15px]" aria-hidden="true">
+			<span class="truncate">{title}</span>
+		</div>
+	</Sidebar.SidebarMenuItem>
+{/snippet}
 
 {#snippet chatRow(chat: Chat)}
 	{#if renamingChatId === chat.id}
@@ -469,56 +487,75 @@
 
 	<!-- Chat history -->
 	<Sidebar.SidebarContent>
-		{#if chatStore.pinnedChats.length > 0}
-			<Sidebar.SidebarGroup class="pb-1">
-				<Sidebar.SidebarGroupLabel>Pinned</Sidebar.SidebarGroupLabel>
-				<Sidebar.SidebarGroupContent>
-					<Sidebar.SidebarMenu>
-						{#each chatStore.pinnedChats as chat (chat.id)}
-							{@render chatRow(chat)}
-						{/each}
-					</Sidebar.SidebarMenu>
-				</Sidebar.SidebarGroupContent>
-			</Sidebar.SidebarGroup>
-		{/if}
+		<div
+			class="transition-[filter,opacity] duration-500 ease-out"
+			class:blur-md={chatStore.initialLoading}
+			class:opacity-60={chatStore.initialLoading}
+		>
+			{#if chatStore.initialLoading}
+				<Sidebar.SidebarGroup class="pb-1">
+					<Sidebar.SidebarGroupLabel>Today</Sidebar.SidebarGroupLabel>
+					<Sidebar.SidebarGroupContent>
+						<Sidebar.SidebarMenu>
+							{#each placeholderTitles as title (title)}
+								{@render placeholderRow(title)}
+							{/each}
+						</Sidebar.SidebarMenu>
+					</Sidebar.SidebarGroupContent>
+				</Sidebar.SidebarGroup>
+			{:else}
+				{#if chatStore.pinnedChats.length > 0}
+					<Sidebar.SidebarGroup class="pb-1">
+						<Sidebar.SidebarGroupLabel>Pinned</Sidebar.SidebarGroupLabel>
+						<Sidebar.SidebarGroupContent>
+							<Sidebar.SidebarMenu>
+								{#each chatStore.pinnedChats as chat (chat.id)}
+									{@render chatRow(chat)}
+								{/each}
+							</Sidebar.SidebarMenu>
+						</Sidebar.SidebarGroupContent>
+					</Sidebar.SidebarGroup>
+				{/if}
 
-		{#if chatStore.todayChats.length > 0}
-			<Sidebar.SidebarGroup class="{chatStore.pinnedChats.length > 0 ? 'mt-3' : ''} pb-1">
-				<Sidebar.SidebarGroupLabel>Today</Sidebar.SidebarGroupLabel>
-				<Sidebar.SidebarGroupContent>
-					<Sidebar.SidebarMenu>
-						{#each chatStore.todayChats as chat (chat.id)}
-							{@render chatRow(chat)}
-						{/each}
-					</Sidebar.SidebarMenu>
-				</Sidebar.SidebarGroupContent>
-			</Sidebar.SidebarGroup>
-		{/if}
+				{#if chatStore.todayChats.length > 0}
+					<Sidebar.SidebarGroup class="{chatStore.pinnedChats.length > 0 ? 'mt-3' : ''} pb-1">
+						<Sidebar.SidebarGroupLabel>Today</Sidebar.SidebarGroupLabel>
+						<Sidebar.SidebarGroupContent>
+							<Sidebar.SidebarMenu>
+								{#each chatStore.todayChats as chat (chat.id)}
+									{@render chatRow(chat)}
+								{/each}
+							</Sidebar.SidebarMenu>
+						</Sidebar.SidebarGroupContent>
+					</Sidebar.SidebarGroup>
+				{/if}
 
-		{#if chatStore.otherChats.length > 0}
-			<Sidebar.SidebarGroup class="mt-3 pb-1">
-				<Sidebar.SidebarGroupLabel>Others</Sidebar.SidebarGroupLabel>
-				<Sidebar.SidebarGroupContent>
-					<Sidebar.SidebarMenu>
-						{#each chatStore.otherChats as chat (chat.id)}
-							{@render chatRow(chat)}
-						{/each}
-					</Sidebar.SidebarMenu>
-				</Sidebar.SidebarGroupContent>
-			</Sidebar.SidebarGroup>
-		{/if}
+				{#if chatStore.otherChats.length > 0}
+					<Sidebar.SidebarGroup class="mt-3 pb-1">
+						<Sidebar.SidebarGroupLabel>Others</Sidebar.SidebarGroupLabel>
+						<Sidebar.SidebarGroupContent>
+							<Sidebar.SidebarMenu>
+								{#each chatStore.otherChats as chat (chat.id)}
+									{@render chatRow(chat)}
+								{/each}
+							</Sidebar.SidebarMenu>
+						</Sidebar.SidebarGroupContent>
+					</Sidebar.SidebarGroup>
+				{/if}
 
-		{#if !hasAnyChats}
-			<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-				No conversations yet
-			</div>
-		{/if}
+				{#if !hasAnyChats}
+					<div class="px-3 py-4 text-center text-sm text-muted-foreground">
+						No conversations yet
+					</div>
+				{/if}
 
-		{#if chatStore.othersHasMore}
-			<div bind:this={sentinel} class="flex h-10 items-center justify-center text-xs text-muted-foreground">
-				{chatStore.othersLoadingMore ? 'Loading…' : ''}
-			</div>
-		{/if}
+				{#if chatStore.othersHasMore}
+					<div bind:this={sentinel} class="flex h-10 items-center justify-center text-xs text-muted-foreground">
+						{chatStore.othersLoadingMore ? 'Loading…' : ''}
+					</div>
+				{/if}
+			{/if}
+		</div>
 	</Sidebar.SidebarContent>
 
 	<!-- Footer: Auth -->
@@ -527,52 +564,67 @@
 			<Separator />
 		</div>
 		<div class="px-2 pb-1">
-			{#if authStore.loading}
-				<Skeleton class="h-10 w-full rounded-lg" />
-			{:else if authStore.isAuthenticated}
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
-						{#snippet child({ props })}
-							<button
-								{...props}
-								class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent"
-							>
-								{#if authStore.avatarUrl}
-									<img src={authStore.avatarUrl} alt="" class="size-7 rounded-full" />
-								{:else}
-									<div class="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-										{authStore.displayName?.[0]?.toUpperCase() ?? '?'}
+			<div
+				class="transition-[filter,opacity] duration-500 ease-out"
+				class:blur-md={authStore.loading}
+				class:opacity-60={authStore.loading}
+			>
+				{#if authStore.loading}
+					<div
+						class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left"
+						aria-hidden="true"
+					>
+						<div class="size-7 rounded-full bg-primary"></div>
+						<div class="flex flex-1 flex-col truncate">
+							<span class="truncate text-sm font-semibold">Loading account</span>
+							<span class="text-xs capitalize text-muted-foreground">free plan</span>
+						</div>
+					</div>
+				{:else if authStore.isAuthenticated}
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger>
+							{#snippet child({ props })}
+								<button
+									{...props}
+									class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent"
+								>
+									{#if authStore.avatarUrl}
+										<img src={authStore.avatarUrl} alt="" class="size-7 rounded-full" />
+									{:else}
+										<div class="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+											{authStore.displayName?.[0]?.toUpperCase() ?? '?'}
+										</div>
+									{/if}
+									<div class="flex flex-1 flex-col truncate">
+										<span class="truncate text-sm font-semibold">{authStore.displayName}</span>
+										<span class="text-xs capitalize text-muted-foreground">{authStore.tier} plan</span>
 									</div>
-								{/if}
-								<div class="flex flex-1 flex-col truncate">
-									<span class="truncate text-sm font-semibold">{authStore.displayName}</span>
-									<span class="text-xs capitalize text-muted-foreground">{authStore.tier} plan</span>
-								</div>
-							</button>
-						{/snippet}
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="start" side="top" class="w-48" sideOffset={8}>
-						<DropdownMenu.Item onSelect={() => {}}>
-							<SettingsIcon class="mr-2 size-4" />
-							Settings
-						</DropdownMenu.Item>
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onSelect={handleSignOut} variant="destructive">
-							<LogOutIcon class="mr-2 size-4" />
-							Sign out
-						</DropdownMenu.Item>
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
-			{:else}
-				<Button
-					variant="outline"
-					class="w-full justify-center gap-2 text-sm font-semibold"
-					onclick={() => authStore.signInWithGoogle()}
-				>
-					<GoogleIcon class="size-4" />
-					Sign in with Google
-				</Button>
-			{/if}
+								</button>
+							{/snippet}
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Content align="start" side="top" class="w-48" sideOffset={8}>
+							<DropdownMenu.Item onSelect={() => {}}>
+								<SettingsIcon class="mr-2 size-4" />
+								Settings
+							</DropdownMenu.Item>
+							<DropdownMenu.Separator />
+							<DropdownMenu.Item onSelect={handleSignOut} variant="destructive">
+								<LogOutIcon class="mr-2 size-4" />
+								Sign out
+							</DropdownMenu.Item>
+						</DropdownMenu.Content>
+					</DropdownMenu.Root>
+				{:else}
+					<Button
+						variant="outline"
+						class="w-full justify-center gap-2 text-sm font-semibold"
+						onclick={() => authStore.signInWithGoogle()}
+					>
+						<GoogleIcon class="size-4" />
+						Sign in with Google
+					</Button>
+				{/if}
+			</div>
 		</div>
 	</Sidebar.SidebarFooter>
 
