@@ -553,7 +553,7 @@
 	<!-- Messages -->
 	<div class="flex-1 overflow-y-auto">
 		{#if messages.length === 0}
-			<div class="flex h-full items-center justify-center pb-32">
+			<div class="flex h-full items-start justify-center px-2 pt-20 pb-32 sm:items-center sm:px-0 sm:pt-0">
 				<div class="w-full max-w-2xl px-4">
 					{#if tempChatEnabled}
 						<h2 class="flex items-center gap-2 text-2xl font-semibold sm:gap-2.5 sm:text-3xl">

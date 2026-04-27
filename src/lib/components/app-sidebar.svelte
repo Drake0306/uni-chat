@@ -635,7 +635,7 @@
 <Command.Dialog
 	bind:open={commandStore.open}
 	shouldFilter={false}
-	class="sm:max-w-2xl! max-w-[calc(100%-2rem)]!"
+	class="top-4! max-w-[calc(100%-1rem)]! sm:top-1/3! sm:max-w-2xl!"
 >
 	<Command.Input
 		bind:value={searchQuery}

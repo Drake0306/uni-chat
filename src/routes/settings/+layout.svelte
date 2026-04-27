@@ -212,7 +212,7 @@
 					<div class="relative mb-8">
 						{#if canScrollLeft}
 							<div
-								class="pointer-events-none absolute inset-y-0 left-0 z-10 flex w-10 items-center bg-gradient-to-r from-background to-transparent sm:hidden"
+								class="pointer-events-none absolute inset-y-0 left-0 z-10 flex w-10 items-center bg-linear-to-r from-background to-transparent sm:hidden"
 								aria-hidden="true"
 							>
 								<div class="flex size-7 items-center justify-center rounded-full bg-accent shadow-md ring-1 ring-border">
@@ -222,7 +222,7 @@
 						{/if}
 						{#if canScrollRight}
 							<div
-								class="pointer-events-none absolute inset-y-0 right-0 z-10 flex w-10 items-center justify-end bg-gradient-to-l from-background to-transparent sm:hidden"
+								class="pointer-events-none absolute inset-y-0 right-0 z-10 flex w-10 items-center justify-end bg-linear-to-l from-background to-transparent sm:hidden"
 								aria-hidden="true"
 							>
 								<div class="flex size-7 items-center justify-center rounded-full bg-accent shadow-md ring-1 ring-border">
