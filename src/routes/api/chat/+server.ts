@@ -52,6 +52,16 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 		return json({ error: `${model.name} requires a Pro subscription.` }, { status: 403 });
 	}
 
+	// Reasoning effort: paid tiers only. Free/guest get "fast" mode (no
+	// thinking param sent at all). Server-side gate so a spoofed request
+	// can't bypass tier limits.
+	const userIsPaid = tier === 'pro' || tier === 'max';
+	const wantsThinking = !!body.thinking && userIsPaid && !!model.effortLevels;
+	const validEfforts = new Set(['low', 'medium', 'high']);
+	const effort: 'low' | 'medium' | 'high' = validEfforts.has(body.effort)
+		? body.effort
+		: 'medium';
+
 	// Route to the correct provider endpoint using the model's internal route
 	const response = await fetch(model.route, {
 		method: 'POST',
@@ -59,7 +69,7 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 		body: JSON.stringify({
 			model: model.apiModelId,
 			messages,
-			...(body.thinking && { thinking: true }),
+			...(wantsThinking && { thinking: true, effort }),
 		}),
 	});
 

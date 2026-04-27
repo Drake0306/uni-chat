@@ -27,8 +27,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		geminiBody.systemInstruction = { parts: [{ text: systemMsg.content }] };
 	}
 	if (body.thinking) {
+		// Map effort to a thinking-budget token count. The numbers are
+		// chosen as ~1× / 8× / 24× scaling — enough variance to feel
+		// different without blowing the model's max budget.
+		const budget =
+			body.effort === 'low' ? 1024 : body.effort === 'high' ? 24576 : 8192;
 		geminiBody.generationConfig = {
-			thinkingConfig: { thinkingBudget: 8192 },
+			thinkingConfig: { thinkingBudget: budget },
 		};
 	}
 

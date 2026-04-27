@@ -10,17 +10,25 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const body = await request.json();
 
+	const groqBody: Record<string, unknown> = {
+		model: body.model,
+		messages: body.messages,
+		stream: true,
+	};
+	// Groq's GPT-OSS models accept `reasoning_effort: low|medium|high`.
+	// Other thinking models on Groq (Qwen3 32B preview) tolerate the
+	// param via the openai-compat endpoint.
+	if (body.thinking && body.effort) {
+		groqBody.reasoning_effort = body.effort;
+	}
+
 	const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
 		method: 'POST',
 		headers: {
 			'Authorization': `Bearer ${apiKey}`,
 			'Content-Type': 'application/json',
 		},
-		body: JSON.stringify({
-			model: body.model,
-			messages: body.messages,
-			stream: true,
-		}),
+		body: JSON.stringify(groqBody),
 	});
 
 	if (!response.ok) {

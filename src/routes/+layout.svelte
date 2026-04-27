@@ -8,12 +8,26 @@
 	// Side-effect import: applies the persisted theme to <html> before any
 	// route mounts so the first paint after refresh matches the user's choice.
 	import '$lib/stores/theme.svelte.js';
+	import { authStore } from '$lib/stores/auth.svelte.js';
+	import { selectionsStore } from '$lib/stores/model-selections.svelte.js';
 
 	let { children } = $props();
 
 	// Settings is a full-viewport route — opt out of the app sidebar so the
 	// page can render its own left rail without competing chrome.
 	const fullViewport = $derived(page.url.pathname.startsWith('/settings'));
+
+	// Hydrate the per-user model selections whenever auth state stabilizes.
+	// Fires on initial mount (after authStore.loading flips false) and again
+	// on sign-in / sign-out so the store always reflects the current user.
+	$effect(() => {
+		// Track both signals so the effect re-runs on either change.
+		const loading = authStore.loading;
+		void authStore.isAuthenticated;
+		if (!loading) {
+			selectionsStore.loadSelections();
+		}
+	});
 </script>
 
 <svelte:head>

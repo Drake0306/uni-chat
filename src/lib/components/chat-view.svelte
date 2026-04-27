@@ -26,6 +26,8 @@
 	import * as Popover from '$lib/components/ui/popover/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group/index.js';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import ModelSelector from '$lib/components/model-selector.svelte';
 	import ThinkingBlock from '$lib/components/thinking-block.svelte';
@@ -134,22 +136,26 @@
 		return () => clearInterval(interval);
 	});
 
-	let thinkingEnabled = $state(false);
 	let visionEnabled = $state(false);
 	let filesEnabled = $state(false);
 	let webSearchEnabled = $state(false);
+	// Reasoning effort for thinking models. Only paid tiers see the picker;
+	// free/guest tiers always run "fast" (no thinking sent at all).
+	let effort = $state<'low' | 'medium' | 'high'>('medium');
 
 	const currentModel = $derived(findModel(selectedModel.companyId, selectedModel.modelId));
+	const isPaidTier = $derived(authStore.tier === 'pro' || authStore.tier === 'max');
+	const showEffortPicker = $derived(!!currentModel?.effortLevels && isPaidTier);
 
 	// Reset toggles on model change
 	let prevModelId: string | undefined;
 	$effect(() => {
 		const id = selectedModel.modelId;
 		if (prevModelId !== undefined && id !== prevModelId) {
-			thinkingEnabled = false;
 			visionEnabled = false;
 			filesEnabled = false;
 			webSearchEnabled = false;
+			effort = 'medium';
 		}
 		prevModelId = id;
 	});
@@ -278,7 +284,7 @@
 					messages: messages
 						.filter((m) => m.id !== assistantMsg.id && !m.isError)
 						.map((m) => ({ role: m.role, content: m.content })),
-					...(thinkingEnabled && { thinking: true }),
+					...(showEffortPicker && { thinking: true, effort }),
 					// In temp mode we omit chatId/messageId so the server-side
 					// tee in /api/chat skips the DB save (its guard requires both).
 					...(!tempChatEnabled &&
@@ -621,17 +627,34 @@
 				<ModelSelector bind:selected={selectedModel} />
 
 				<div class="flex flex-1 items-center justify-end gap-1.5">
-					{#if currentModel?.capabilities.thinking}
-						<button
-							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-								{thinkingEnabled
-									? 'bg-violet-500/15 text-violet-600 ring-1 ring-violet-500/30'
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							onclick={() => thinkingEnabled = !thinkingEnabled}
-						>
-							<BrainIcon class="size-4" />
-							<span>Think</span>
-						</button>
+					{#if showEffortPicker}
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger>
+								{#snippet child({ props })}
+									<button
+										{...props}
+										class="capability-toggle flex items-center gap-1.5 rounded-full bg-violet-500/15 px-2.5 py-1.5 text-sm font-semibold text-violet-600 ring-1 ring-violet-500/30 transition-all"
+										title="Reasoning effort"
+									>
+										<BrainIcon class="size-4" />
+										<span class="capitalize">{effort}</span>
+										<ChevronDownIcon class="size-3" />
+									</button>
+								{/snippet}
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Content align="end" class="w-32">
+								<DropdownMenu.RadioGroup
+									value={effort}
+									onValueChange={(v) => {
+										if (v === 'low' || v === 'medium' || v === 'high') effort = v;
+									}}
+								>
+									<DropdownMenu.RadioItem value="low">Low</DropdownMenu.RadioItem>
+									<DropdownMenu.RadioItem value="medium">Medium</DropdownMenu.RadioItem>
+									<DropdownMenu.RadioItem value="high">High</DropdownMenu.RadioItem>
+								</DropdownMenu.RadioGroup>
+							</DropdownMenu.Content>
+						</DropdownMenu.Root>
 					{/if}
 					{#if currentModel?.capabilities.vision}
 						<button

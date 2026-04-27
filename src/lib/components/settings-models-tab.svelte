@@ -14,15 +14,15 @@
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import KeyIcon from '@lucide/svelte/icons/key';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
-	import { Button } from '$lib/components/ui/button/index.js';
 	import { companies, iconUrl, capabilityLabels, type Model } from '$lib/config/models.js';
+	import { selectionsStore } from '$lib/stores/model-selections.svelte.js';
 
-	// ── Local state (visual-only; no persistence wired yet) ─────
+	// ── Local UI state ──────────────────────────────────────────
 	type View = 'list' | 'grid';
 	let view = $state<View>('list');
 	let search = $state('');
-	let recommended = $state<Set<string>>(new Set());
 
 	// Filter dropdown state — checkboxes toggle visually but don't filter.
 	let filterFast = $state(false);
@@ -53,24 +53,30 @@
 	);
 
 	function modelDescription(m: Model): string {
-		return capabilityLabels(m.capabilities, m.contextWindow).join(' · ');
+		// Prefer the curated description; fall back to a capability summary
+		// for any model that hasn't been backfilled yet.
+		return m.description ?? capabilityLabels(m.capabilities, m.contextWindow).join(' · ');
+	}
+
+	function priceTierColor(tier: '$' | '$$' | '$$$' | '$$$$'): string {
+		// Subtle gradient: cheap=green, premium=red. Matches the screenshot's
+		// green→amber→red feel.
+		if (tier === '$') return 'text-emerald-600 dark:text-emerald-400';
+		if (tier === '$$') return 'text-amber-600 dark:text-amber-400';
+		if (tier === '$$$') return 'text-orange-600 dark:text-orange-400';
+		return 'text-rose-600 dark:text-rose-400';
 	}
 
 	function toggleRecommend(id: string) {
-		const next = new Set(recommended);
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-		recommended = next;
+		void selectionsStore.toggle(id);
 	}
 
 	function selectRecommended() {
-		// Visual stub — picks all models as "recommended". Real curation
-		// will replace this when the logic gets wired.
-		recommended = new Set(allModels.map((m) => m.id));
+		void selectionsStore.selectRecommended();
 	}
 
 	function unselectAll() {
-		recommended = new Set();
+		void selectionsStore.unselectAll();
 	}
 </script>
 
@@ -122,7 +128,7 @@
 
 <!-- Toolbar -->
 <div class="mb-4 flex flex-wrap items-center gap-2">
-	<div class="min-w-[12rem] flex-1">
+	<div class="min-w-48 flex-1">
 		<input
 			bind:value={search}
 			type="text"
@@ -245,12 +251,17 @@
 	</div>
 {/snippet}
 
-<!-- Recommendation star button -->
+<!-- Recommendation star button. stopPropagation so clicking it doesn't
+     also follow the row's link to the model detail page. -->
 {#snippet starButton(m: Model)}
-	{@const isRec = recommended.has(m.id)}
+	{@const isRec = selectionsStore.has(m.id)}
 	<button
 		class="flex size-8 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent"
-		onclick={() => toggleRecommend(m.id)}
+		onclick={(e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			toggleRecommend(m.id);
+		}}
 		aria-label={isRec ? 'Unmark recommended' : 'Mark recommended'}
 	>
 		<StarIcon
@@ -269,27 +280,43 @@
 {:else if view === 'list'}
 	<div class="divide-y rounded-xl border bg-card">
 		{#each filteredModels as m (m.id)}
-			<div class="flex items-center gap-3 px-4 py-3">
-				<img src={iconUrl(m.icon)} alt="" class="size-7 shrink-0 rounded" />
-				<div class="min-w-0 flex-1">
-					<div class="flex flex-wrap items-center gap-2">
-						<span class="font-semibold">{m.name}</span>
-						{#if m.free}
-							<span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
-								<ZapIcon class="size-3" />
-								Free
-							</span>
-						{/if}
-						{#if m.isNew}
-							<span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-								New
-							</span>
-						{/if}
+			<div class="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/30">
+				<a
+					href="/settings/models/{m.id}"
+					class="flex min-w-0 flex-1 items-center gap-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card rounded-md"
+				>
+					<img src={iconUrl(m.icon)} alt="" class="size-7 shrink-0 rounded" />
+					<div class="min-w-0 flex-1">
+						<div class="flex flex-wrap items-center gap-2">
+							<span class="font-semibold">{m.name}</span>
+							{#if m.priceTier}
+								<span class="font-mono text-xs font-bold {priceTierColor(m.priceTier)}">
+									{m.priceTier}
+								</span>
+							{/if}
+							{#if m.free}
+								<span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
+									<ZapIcon class="size-3" />
+									Free
+								</span>
+							{/if}
+							{#if m.byok}
+								<span class="inline-flex items-center gap-1 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+									<KeyIcon class="size-3" />
+									BYOK
+								</span>
+							{/if}
+							{#if m.isNew}
+								<span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+									New
+								</span>
+							{/if}
+						</div>
+						<p class="mt-0.5 truncate text-xs text-muted-foreground">
+							{modelDescription(m)}
+						</p>
 					</div>
-					<p class="mt-0.5 truncate text-xs text-muted-foreground">
-						{modelDescription(m)}
-					</p>
-				</div>
+				</a>
 				{@render capabilityIcons(m, 'sm')}
 				{@render starButton(m)}
 			</div>
@@ -299,31 +326,47 @@
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
 		{#each filteredModels as m (m.id)}
 			<div
-				class="relative flex flex-col rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30 {m.isNew
+				class="relative flex flex-col rounded-xl border bg-card transition-colors hover:bg-accent/30 {m.isNew
 					? 'ring-1 ring-amber-500/40'
 					: ''}"
 			>
 				{#if m.isNew}
-					<span class="absolute -top-2 right-3 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+					<span class="absolute -top-2 right-3 z-10 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
 						New
 					</span>
 				{/if}
-				<div class="absolute right-2 top-2">
+				<div class="absolute right-2 top-2 z-10">
 					{@render starButton(m)}
 				</div>
-				<img src={iconUrl(m.icon)} alt="" class="size-8 rounded" />
-				<h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-tight">{m.name}</h3>
-				<div class="mt-2 flex items-center gap-1.5">
-					{#if m.free}
-						<span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
-							<ZapIcon class="size-2.5" />
-							Free
-						</span>
-					{/if}
-				</div>
-				<div class="mt-auto pt-3">
-					{@render capabilityIcons(m, 'sm')}
-				</div>
+				<a
+					href="/settings/models/{m.id}"
+					class="flex flex-1 flex-col p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
+				>
+					<img src={iconUrl(m.icon)} alt="" class="size-8 rounded" />
+					<h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-tight">{m.name}</h3>
+					<div class="mt-2 flex flex-wrap items-center gap-1.5">
+						{#if m.priceTier}
+							<span class="font-mono text-xs font-bold {priceTierColor(m.priceTier)}">
+								{m.priceTier}
+							</span>
+						{/if}
+						{#if m.free}
+							<span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
+								<ZapIcon class="size-2.5" />
+								Free
+							</span>
+						{/if}
+						{#if m.byok}
+							<span class="inline-flex items-center gap-1 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+								<KeyIcon class="size-2.5" />
+								BYOK
+							</span>
+						{/if}
+					</div>
+					<div class="mt-auto pt-3">
+						{@render capabilityIcons(m, 'sm')}
+					</div>
+				</a>
 			</div>
 		{/each}
 	</div>

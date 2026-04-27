@@ -20,6 +20,7 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import { companies, iconUrl, hasEnabledModels, capabilityLabels, PROVIDERS, type Company, type Model } from '$lib/config/models.js';
+	import { selectionsStore } from '$lib/stores/model-selections.svelte.js';
 
 	let {
 		selected = $bindable(),
@@ -32,7 +33,30 @@
 	let open = $state(false);
 	let search = $state('');
 	let expanded = $state(true);
+
+	// Companies, with each company's models filtered down to the user's
+	// starred-and-enabled set. Companies with zero visible models drop out.
+	const visibleCompanies = $derived(
+		companies
+			.map((c) => ({
+				...c,
+				models: c.models.filter((m) => m.enabled && selectionsStore.has(m.id)),
+			}))
+			.filter((c) => c.models.length > 0)
+	);
+
+	// Initial value is a safe fallback; the $effect below switches to the
+	// first *visible* company on mount before the user opens the popover.
 	let activeCompany = $state(companies[0]);
+
+	// If the active company drops out of the visible list (user un-starred
+	// its last model), fall back to the first remaining visible company.
+	$effect(() => {
+		if (visibleCompanies.length === 0) return;
+		if (!visibleCompanies.some((c) => c.id === activeCompany.id)) {
+			activeCompany = visibleCompanies[0];
+		}
+	});
 	let sidebarEl: HTMLDivElement | undefined = $state();
 	let canScrollUp = $state(false);
 	let canScrollDown = $state(false);
@@ -64,7 +88,7 @@
 	const allFilteredCompanies = $derived(() => {
 		if (!search) return null;
 		const q = search.toLowerCase();
-		return companies
+		return visibleCompanies
 			.map((c) => ({
 				...c,
 				models: c.models.filter(
@@ -177,6 +201,15 @@
 			</div>
 
 			<!-- Body: sidebar + models -->
+			{#if visibleCompanies.length === 0}
+				<div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+					<p class="text-sm font-medium">No models selected</p>
+					<p class="text-xs text-muted-foreground">
+						Star models in <span class="font-medium text-foreground">Settings → Models</span>
+						to add them here.
+					</p>
+				</div>
+			{:else}
 			<div class="flex flex-1 overflow-hidden">
 				<!-- Company sidebar -->
 				<div class="relative flex w-18 flex-col border-r bg-muted/10">
@@ -193,8 +226,7 @@
 						bind:this={sidebarEl}
 						onscroll={checkSidebarScroll}
 					>
-						{#each companies as company}
-							{@const hasEnabled = hasEnabledModels(company)}
+						{#each visibleCompanies as company (company.id)}
 							<Tooltip.Root>
 								<Tooltip.Trigger>
 									{#snippet child({ props })}
@@ -203,21 +235,19 @@
 											class="flex size-11 shrink-0 items-center justify-center rounded-xl transition-all
 												{activeCompany.id === company.id
 													? 'bg-primary/10 ring-2 ring-primary/40 scale-105'
-													: hasEnabled
-														? 'hover:bg-muted'
-														: 'opacity-35 cursor-default'}"
+													: 'hover:bg-muted'}"
 											onclick={() => { activeCompany = company; search = ''; }}
 										>
 											<img
 												src={iconUrl(company.icon)}
 												alt={company.name}
-												class="size-6 {hasEnabled ? '' : 'grayscale'}"
+												class="size-6"
 											/>
 										</button>
 									{/snippet}
 								</Tooltip.Trigger>
 								<Tooltip.Content side="right">
-									{company.name}{hasEnabled ? '' : ' (Pro)'}
+									{company.name}
 								</Tooltip.Content>
 							</Tooltip.Root>
 						{/each}
@@ -333,6 +363,7 @@
 					{/if}
 				</div>
 			</div>
+			{/if}
 		</div>
 	</Popover.Content>
 </Popover.Root>

@@ -10,6 +10,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const body = await request.json();
 
+	const orBody: Record<string, unknown> = {
+		model: body.model,
+		messages: body.messages,
+		stream: true,
+	};
+	// OpenRouter normalizes reasoning across providers — { effort } maps
+	// to the underlying model's native parameter (e.g., DeepSeek R1).
+	if (body.thinking && body.effort) {
+		orBody.reasoning = { effort: body.effort };
+	}
+
 	const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 		method: 'POST',
 		headers: {
@@ -18,11 +29,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			'HTTP-Referer': 'https://unichat.app',
 			'X-Title': 'Uni Chat',
 		},
-		body: JSON.stringify({
-			model: body.model,
-			messages: body.messages,
-			stream: true,
-		}),
+		body: JSON.stringify(orBody),
 	});
 
 	if (!response.ok) {
