@@ -29,7 +29,7 @@
 	import { findModel, getDefaultModel } from '$lib/config/models.js';
 	import GoogleIcon from '$lib/components/google-icon.svelte';
 
-	const isMac = browser && navigator.platform.toUpperCase().includes('MAC');
+	const isMac = browser && /Mac/i.test(navigator.userAgent);
 
 	// Load chats once after auth resolves. Sign-in/out cleanup is handled
 	// explicitly in the dropdown handlers below — keeping it imperative avoids

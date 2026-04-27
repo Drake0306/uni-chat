@@ -17,6 +17,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import SettingsModelsTab from '$lib/components/settings-models-tab.svelte';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
 
@@ -630,6 +631,8 @@
 								</div>
 							</section>
 						</div>
+					{:else if activeTab === 'models'}
+						<SettingsModelsTab />
 					{:else}
 						<!-- Other tabs intentionally empty; content specs are pending. -->
 						<div class="rounded-xl border border-dashed bg-card/50 px-6 py-16 text-center text-sm text-muted-foreground">
