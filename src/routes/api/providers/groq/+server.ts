@@ -15,11 +15,22 @@ export const POST: RequestHandler = async ({ request }) => {
 		messages: body.messages,
 		stream: true,
 	};
-	// Groq's GPT-OSS models accept `reasoning_effort: low|medium|high`.
-	// Other thinking models on Groq (Qwen3 32B preview) tolerate the
-	// param via the openai-compat endpoint.
+	// reasoning_effort values are model-family-specific on Groq:
+	//   • openai/gpt-oss-120b, openai/gpt-oss-20b → 'low' | 'medium' | 'high'
+	//   • qwen/qwen3-32b                          → 'none' | 'default'
+	// Sending the wrong vocabulary throws "reasoning_effort must be one of …".
+	// Fast mode never reaches here (server omits `body.thinking`), so we only
+	// need to map the on-states.
 	if (body.thinking && body.effort) {
-		groqBody.reasoning_effort = body.effort;
+		const modelId = typeof body.model === 'string' ? body.model : '';
+		if (modelId.startsWith('qwen/')) {
+			// Qwen treats reasoning as binary; any of our low/medium/high
+			// flatten to 'default' (thinking on).
+			groqBody.reasoning_effort = 'default';
+		} else {
+			// GPT-OSS family — pass our value through.
+			groqBody.reasoning_effort = body.effort;
+		}
 	}
 
 	const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {

@@ -27,6 +27,7 @@
 	import * as ToggleGroup from '$lib/components/ui/toggle-group/index.js';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import ModelSelector from '$lib/components/model-selector.svelte';
 	import ThinkingBlock from '$lib/components/thinking-block.svelte';
@@ -153,6 +154,21 @@
 	const currentModel = $derived(findModel(selectedModel.companyId, selectedModel.modelId));
 	const showEffortPicker = $derived(!!currentModel?.capabilities.thinking);
 	const thinkingActive = $derived(effort !== 'fast');
+
+	// Guests are gated out of search, file upload, and non-Fast reasoning
+	// effort. The buttons still render so the affordance is visible — just
+	// locked. Server-side enforcement below in /api/chat as defense-in-depth.
+	const isGuest = $derived(!authStore.isAuthenticated);
+
+	// When auth flips off (sign-out, or arriving as a guest with stale
+	// localStorage state), clamp the gated toggles back to safe values so
+	// the UI and outgoing requests agree.
+	$effect(() => {
+		if (isGuest) {
+			if (chatStore.effort !== 'fast') chatStore.setEffort('fast');
+			if (chatStore.webSearchEnabled) chatStore.setWebSearchEnabled(false);
+		}
+	});
 
 	// Reset toggles on model change
 	let prevModelId: string | undefined;
@@ -360,8 +376,16 @@
 					try {
 						const parsed = JSON.parse(data);
 						const delta = parsed.choices?.[0]?.delta;
-						if (delta?.reasoning_content) {
-							assistantMsg.reasoning = (assistantMsg.reasoning ?? '') + delta.reasoning_content;
+						// Different providers name the reasoning field differently:
+						//   • Our Gemini transform emits `reasoning_content`
+						//   • Groq's GPT-OSS reasoning models emit `reasoning`
+						//   • OpenRouter normalizes thinking models to `reasoning`
+						// Accept either so thinking displays across all of them.
+						const reasoningChunk: unknown =
+							delta?.reasoning_content ?? delta?.reasoning;
+						if (typeof reasoningChunk === 'string' && reasoningChunk.length > 0) {
+							assistantMsg.reasoning =
+								(assistantMsg.reasoning ?? '') + reasoningChunk;
 							assistantMsg.isThinking = true;
 						}
 						if (delta?.content) {
@@ -708,19 +732,41 @@
 									</button>
 								{/snippet}
 							</DropdownMenu.Trigger>
-							<DropdownMenu.Content align="end" class="w-32">
+							<DropdownMenu.Content align="end" class="w-36">
 								<DropdownMenu.RadioGroup
 									value={effort}
 									onValueChange={(v) => {
+										if (isGuest) return;
 										if (v === 'fast' || v === 'low' || v === 'medium' || v === 'high') {
 											chatStore.setEffort(v);
 										}
 									}}
 								>
 									<DropdownMenu.RadioItem value="fast">Fast</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem value="low">Low</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem value="medium">Medium</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem value="high">High</DropdownMenu.RadioItem>
+									<DropdownMenu.RadioItem value="low" disabled={isGuest}>
+										<span class="flex w-full items-center justify-between">
+											<span>Low</span>
+											{#if isGuest}
+												<LockIcon class="size-3 text-muted-foreground" />
+											{/if}
+										</span>
+									</DropdownMenu.RadioItem>
+									<DropdownMenu.RadioItem value="medium" disabled={isGuest}>
+										<span class="flex w-full items-center justify-between">
+											<span>Medium</span>
+											{#if isGuest}
+												<LockIcon class="size-3 text-muted-foreground" />
+											{/if}
+										</span>
+									</DropdownMenu.RadioItem>
+									<DropdownMenu.RadioItem value="high" disabled={isGuest}>
+										<span class="flex w-full items-center justify-between">
+											<span>High</span>
+											{#if isGuest}
+												<LockIcon class="size-3 text-muted-foreground" />
+											{/if}
+										</span>
+									</DropdownMenu.RadioItem>
 								</DropdownMenu.RadioGroup>
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
@@ -730,30 +776,46 @@
 					{#if currentModel?.capabilities.files}
 						<button
 							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-								{attachedFiles.length > 0
-									? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							onclick={openFilePicker}
-							title="Attach a PDF"
+								{isGuest
+									? 'cursor-not-allowed text-muted-foreground/50'
+									: attachedFiles.length > 0
+										? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
+										: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+							onclick={isGuest ? undefined : openFilePicker}
+							disabled={isGuest}
+							title={isGuest ? 'Sign in to attach files' : 'Attach a PDF'}
 						>
-							<PaperclipIcon class="size-4" />
+							{#if isGuest}
+								<LockIcon class="size-4" />
+							{:else}
+								<PaperclipIcon class="size-4" />
+							{/if}
 							<span>
-								Attach{attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
+								Attach{!isGuest && attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
 							</span>
 						</button>
 					{/if}
-					<!-- Web Search is always available. Native-search models (Compound,
-					     Sonar) handle it themselves; for others, a custom search-tool
-					     wrapper will inject results into the request — wired in a
-					     follow-up. The toggle is honored either way. -->
+					<!-- Web Search is always available for signed-in users. Native-
+					     search models (Compound, Sonar) handle it themselves; for
+					     others, a custom search-tool wrapper will inject results
+					     into the request — wired in a follow-up. Guests see the
+					     button locked. -->
 					<button
 						class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-							{webSearchEnabled
-								? 'bg-teal-500/15 text-teal-600 ring-1 ring-teal-500/30'
-								: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-						onclick={() => chatStore.setWebSearchEnabled(!chatStore.webSearchEnabled)}
+							{isGuest
+								? 'cursor-not-allowed text-muted-foreground/50'
+								: webSearchEnabled
+									? 'bg-teal-500/15 text-teal-600 ring-1 ring-teal-500/30'
+									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+						onclick={isGuest ? undefined : () => chatStore.setWebSearchEnabled(!chatStore.webSearchEnabled)}
+						disabled={isGuest}
+						title={isGuest ? 'Sign in to use web search' : 'Toggle web search'}
 					>
-						<GlobeIcon class="size-4" />
+						{#if isGuest}
+							<LockIcon class="size-4" />
+						{:else}
+							<GlobeIcon class="size-4" />
+						{/if}
 						<span>Search</span>
 					</button>
 				</div>

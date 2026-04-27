@@ -55,11 +55,24 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 		return json({ error: `${model.name} requires a Pro subscription.` }, { status: 403 });
 	}
 
+	// Guest gating — sign-in required for web search and reasoning effort.
+	// Client side already locks the affordances; this is defense-in-depth
+	// against spoofed requests. Web search 403s explicitly (it's a clear
+	// "you tried to use a feature that needs auth"). Thinking is silently
+	// downgraded to Fast for guests so a stale-state guest still gets a
+	// normal answer instead of an error.
+	if (body.webSearch && !user) {
+		return json(
+			{ error: 'Sign in to use web search.' },
+			{ status: 403 }
+		);
+	}
+
 	// Reasoning effort. Client picks Fast / Low / Medium / High. Fast omits
 	// the `thinking` flag entirely (the absence of the flag is the signal).
-	// Other levels enable thinking with that effort. No tier gating — quota
-	// pressure is handled by the rate limiter, not by hiding the feature.
-	const wantsThinking = !!body.thinking && model.capabilities.thinking;
+	// Other levels enable thinking with that effort. Guests are clamped to
+	// Fast at the server level too.
+	const wantsThinking = !!body.thinking && model.capabilities.thinking && !!user;
 	const validEfforts = new Set(['low', 'medium', 'high']);
 	const effort: 'low' | 'medium' | 'high' = validEfforts.has(body.effort)
 		? body.effort

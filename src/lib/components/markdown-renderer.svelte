@@ -5,18 +5,42 @@
 
 	let html = $state('');
 	let containerEl: HTMLDivElement | undefined = $state();
-	let renderTimer: ReturnType<typeof setTimeout> | undefined;
 
-	// Debounce rendering during streaming
+	// Throttle, not debounce. The previous debounce reset on every chunk —
+	// fast-streaming providers (Groq GPT-OSS, OpenRouter Llama) never had a
+	// long-enough idle gap, so markdown rendered only at end-of-stream and
+	// users saw raw `*foo*` / unrendered code fences mid-flight. With
+	// throttling the markdown re-renders every ~100ms during streaming
+	// regardless of chunk cadence.
+	const RENDER_INTERVAL = 100;
+	let renderScheduled = false;
+	let lastRenderTime = 0;
+	let activeRenderId = 0;
+
 	$effect(() => {
-		const text = content;
-		clearTimeout(renderTimer);
-		renderTimer = setTimeout(async () => {
-			if (text) {
-				html = await renderMarkdown(text);
+		void content; // track the prop as a dependency
+		if (!content) {
+			html = '';
+			lastRenderTime = 0;
+			return;
+		}
+		if (renderScheduled) return;
+		renderScheduled = true;
+		const elapsed = Date.now() - lastRenderTime;
+		const delay = lastRenderTime === 0 ? 0 : Math.max(0, RENDER_INTERVAL - elapsed);
+		setTimeout(async () => {
+			renderScheduled = false;
+			lastRenderTime = Date.now();
+			// Tag this render so out-of-order async completions don't
+			// overwrite newer ones if a later render finishes first.
+			const myId = ++activeRenderId;
+			try {
+				const result = await renderMarkdown(content);
+				if (myId === activeRenderId) html = result;
+			} catch (err) {
+				console.warn('[markdown] render failed:', err);
 			}
-		}, 80);
-		return () => clearTimeout(renderTimer);
+		}, delay);
 	});
 
 	// Event delegation for copy + collapse buttons
