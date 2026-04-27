@@ -179,9 +179,17 @@ Provider research docs are in `docs/providers/`. Full model reference table at `
 
 - **Every Model entry must have a `provider` field** (typed `Provider`, one of 12 values). The `PROVIDERS` map maps each provider → `{ name, icon }` for the "via [Provider]" chip in the model selector.
 - **Companies vs providers:** Companies group models in the selector (Google, Meta, Anthropic, OpenAI, …). The `provider` field tells you who hosts the inference. The same model can appear under one company with multiple provider entries (e.g., "Llama 3.3 70B" via OpenRouter AND "Llama 3.3 70B (Fast)" via Groq are two separate model entries under Meta).
-- **Adding a new model:** specify `provider`, `route` (often the same as provider), and `apiModelId` (what gets sent to the provider's API). For preview/evaluation-only models (Groq's preview tier), add a code comment flagging the limitation.
+- **Adding a new model — checklist:**
+  1. Add a `Model` entry under the right company in `models.ts`. Required: `id`, `name`, `icon`, `capabilities` (via `caps({...})`), `contextWindow`, `free`, `enabled`, `provider`, `route`, `apiModelId`. Editorial: `description`, `longDescription`, `developer`, `addedOn`, `priceTier` (paid only), `byok` (BYOK-only). Preview/evaluation models: add a code comment. (The Fast/Low/Med/High effort picker shows automatically whenever `capabilities.thinking === true`.)
+  2. **`aaSlug`** — Artificial Analysis URL slug. Verify by visiting `https://artificialanalysis.ai/models/<slug>`. Powers the benchmark cards on the detail page. Leave undefined if AA doesn't track it.
+  3. **`modelsDevId`** — id on models.dev. Find with `curl -s https://models.dev/api.json | grep -i <name>`. Drives the augmentation pulled by `npm run sync-models`.
+  4. **Run `npm run sync-models`.** Writes `src/lib/config/models-augmentation.generated.ts` (committed). Reports unresolved `modelsDevId`s. The merger at the bottom of `models.ts` auto-populates `contextWindow` and `knowledgeCutoff` from the augmentation at module load.
+  5. Add the model's `id` to `DEFAULT_RECOMMENDED` if it should be starred for new users by default.
+  6. `npm run check`. Commit `models.ts` + `models-augmentation.generated.ts`.
+- **Augmentation overrides** (`sync-models` from models.dev): `contextWindow`, `knowledgeCutoff`, and `capabilities.{vision, thinking, tools, files}`. Hardcoded values are fallback when augmentation has no data. `capabilities.{webSearch, imageGeneration}` stay editorial — models.dev doesn't track them reliably. So when adding a thinking model, **map `modelsDevId` to the thinking variant** (e.g., `kimi-k2-thinking`, not `kimi-k2-0905-preview`) — script reports show ↓ if a hardcoded `true` got overridden to `false`.
 - **Disabled models stay in config** with `enabled: false` and a comment explaining why (e.g., Mixtral 8x7B was deprecated by Groq).
 - **Adding new provider icons:** download from `https://unpkg.com/@lobehub/icons-static-svg@latest/icons/<slug>.svg` into `static/icons/`. Color variants (`<slug>-color.svg`) don't exist for all providers — fall back to mono SVGs which use `currentColor`.
+- **Full background:** `docs/model-metadata-sources.md` (why hardcoded + augmentation), `docs/api-keys.md` (where every provider key comes from).
 
 ## Groq specifics
 

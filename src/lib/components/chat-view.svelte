@@ -1,7 +1,6 @@
 <script lang="ts">
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import BrainIcon from '@lucide/svelte/icons/brain';
-	import EyeIcon from '@lucide/svelte/icons/eye';
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import CopyIcon from '@lucide/svelte/icons/copy';
@@ -136,29 +135,59 @@
 		return () => clearInterval(interval);
 	});
 
-	let visionEnabled = $state(false);
-	let filesEnabled = $state(false);
-	let webSearchEnabled = $state(false);
-	// Reasoning effort for thinking models. Only paid tiers see the picker;
-	// free/guest tiers always run "fast" (no thinking sent at all).
-	let effort = $state<'low' | 'medium' | 'high'>('medium');
+	// Vision is auto-handled by models that support it (image input is just
+	// part of the message content) — no user-facing toggle required.
+	//
+	// Web search and reasoning effort live in chatStore (not local state) so
+	// they survive the first-message `goto('/chat/<id>')` navigation, which
+	// unmounts the home-page ChatView and mounts the chat-page one. See the
+	// "Cross-navigation flags belong in the store" note in CLAUDE.md.
+	const webSearchEnabled = $derived(chatStore.webSearchEnabled);
+	const effort = $derived(chatStore.effort);
+	// Files staged for the next message. Click the paperclip → picks PDFs.
+	// Display-only for now — actual transmission to the provider is a
+	// follow-up task (per-provider base64 encoding, content-type handling).
+	let attachedFiles = $state<File[]>([]);
+	let fileInputEl: HTMLInputElement | undefined = $state();
 
 	const currentModel = $derived(findModel(selectedModel.companyId, selectedModel.modelId));
-	const isPaidTier = $derived(authStore.tier === 'pro' || authStore.tier === 'max');
-	const showEffortPicker = $derived(!!currentModel?.effortLevels && isPaidTier);
+	const showEffortPicker = $derived(!!currentModel?.capabilities.thinking);
+	const thinkingActive = $derived(effort !== 'fast');
 
 	// Reset toggles on model change
 	let prevModelId: string | undefined;
 	$effect(() => {
 		const id = selectedModel.modelId;
 		if (prevModelId !== undefined && id !== prevModelId) {
-			visionEnabled = false;
-			filesEnabled = false;
-			webSearchEnabled = false;
-			effort = 'medium';
+			// Capability-gated UI hides the effort picker when the new model
+			// doesn't think and the Attach button when it doesn't accept
+			// files — so we don't need to clear those values eagerly. Effort
+			// and webSearchEnabled persist silently in chatStore (and to
+			// localStorage); when the user returns to a compatible model the
+			// previous preference is still there.
+			//
+			// Attached files are per-message content, not a preference — they
+			// only make sense for the next send and would be stale across a
+			// model switch, so we clear them.
+			attachedFiles = [];
 		}
 		prevModelId = id;
 	});
+
+	function openFilePicker() {
+		fileInputEl?.click();
+	}
+
+	function handleFileSelect(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const picked = Array.from(input.files ?? []);
+		attachedFiles = [...attachedFiles, ...picked];
+		input.value = '';
+	}
+
+	function removeAttachedFile(index: number) {
+		attachedFiles = attachedFiles.filter((_, i) => i !== index);
+	}
 
 	// ── Suggestion prompts ──────────────────────────────
 	const suggestions = {
@@ -244,6 +273,9 @@
 		};
 		chatStore.pushMessage(userMsg);
 		input = '';
+		// Clear staged file chips. Actual file transmission isn't wired yet —
+		// follow-up task is per-provider PDF/image content-block encoding.
+		attachedFiles = [];
 		loading = true;
 
 		chatStore.pushMessage({
@@ -284,7 +316,8 @@
 					messages: messages
 						.filter((m) => m.id !== assistantMsg.id && !m.isError)
 						.map((m) => ({ role: m.role, content: m.content })),
-					...(showEffortPicker && { thinking: true, effort }),
+					...(showEffortPicker && thinkingActive && { thinking: true, effort }),
+					...(webSearchEnabled && { webSearch: true }),
 					// In temp mode we omit chatId/messageId so the server-side
 					// tee in /api/chat skips the DB save (its guard requires both).
 					...(!tempChatEnabled &&
@@ -613,6 +646,36 @@
 	<!-- Composer -->
 	<div class="px-4 pb-4">
 		<div class="mx-auto max-w-3xl rounded-2xl bg-muted/30 p-3">
+			<!-- Hidden file picker. Triggered by the "Attach" button below. -->
+			<input
+				type="file"
+				accept="application/pdf"
+				multiple
+				class="hidden"
+				bind:this={fileInputEl}
+				onchange={handleFileSelect}
+			/>
+
+			<!-- Staged file attachments. Visual only for now — files are not yet
+			     transmitted to the provider; that's a follow-up task. -->
+			{#if attachedFiles.length > 0}
+				<div class="mb-2 flex flex-wrap gap-1.5 px-1">
+					{#each attachedFiles as f, i (i + ':' + f.name)}
+						<div class="flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs">
+							<PaperclipIcon class="size-3 text-muted-foreground" />
+							<span class="max-w-40 truncate">{f.name}</span>
+							<button
+								class="text-muted-foreground hover:text-foreground"
+								onclick={() => removeAttachedFile(i)}
+								aria-label="Remove file"
+							>
+								×
+							</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
 			<!-- Textarea -->
 			<Textarea
 				bind:value={input}
@@ -633,7 +696,10 @@
 								{#snippet child({ props })}
 									<button
 										{...props}
-										class="capability-toggle flex items-center gap-1.5 rounded-full bg-violet-500/15 px-2.5 py-1.5 text-sm font-semibold text-violet-600 ring-1 ring-violet-500/30 transition-all"
+										class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+											{thinkingActive
+												? 'bg-violet-500/15 text-violet-600 ring-1 ring-violet-500/30'
+												: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
 										title="Reasoning effort"
 									>
 										<BrainIcon class="size-4" />
@@ -646,9 +712,12 @@
 								<DropdownMenu.RadioGroup
 									value={effort}
 									onValueChange={(v) => {
-										if (v === 'low' || v === 'medium' || v === 'high') effort = v;
+										if (v === 'fast' || v === 'low' || v === 'medium' || v === 'high') {
+											chatStore.setEffort(v);
+										}
 									}}
 								>
+									<DropdownMenu.RadioItem value="fast">Fast</DropdownMenu.RadioItem>
 									<DropdownMenu.RadioItem value="low">Low</DropdownMenu.RadioItem>
 									<DropdownMenu.RadioItem value="medium">Medium</DropdownMenu.RadioItem>
 									<DropdownMenu.RadioItem value="high">High</DropdownMenu.RadioItem>
@@ -656,42 +725,37 @@
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
 					{/if}
-					{#if currentModel?.capabilities.vision}
-						<button
-							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-								{visionEnabled
-									? 'bg-blue-500/15 text-blue-600 ring-1 ring-blue-500/30'
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							onclick={() => visionEnabled = !visionEnabled}
-						>
-							<EyeIcon class="size-4" />
-							<span>Vision</span>
-						</button>
-					{/if}
+					<!-- Vision is implicit: models that accept image input handle it
+					     automatically when an image is part of the message — no toggle needed. -->
 					{#if currentModel?.capabilities.files}
 						<button
 							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-								{filesEnabled
+								{attachedFiles.length > 0
 									? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
 									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							onclick={() => filesEnabled = !filesEnabled}
+							onclick={openFilePicker}
+							title="Attach a PDF"
 						>
 							<PaperclipIcon class="size-4" />
-							<span>File</span>
+							<span>
+								Attach{attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
+							</span>
 						</button>
 					{/if}
-					{#if currentModel?.capabilities.webSearch}
-						<button
-							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-								{webSearchEnabled
-									? 'bg-teal-500/15 text-teal-600 ring-1 ring-teal-500/30'
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							onclick={() => webSearchEnabled = !webSearchEnabled}
-						>
-							<GlobeIcon class="size-4" />
-							<span>Search</span>
-						</button>
-					{/if}
+					<!-- Web Search is always available. Native-search models (Compound,
+					     Sonar) handle it themselves; for others, a custom search-tool
+					     wrapper will inject results into the request — wired in a
+					     follow-up. The toggle is honored either way. -->
+					<button
+						class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+							{webSearchEnabled
+								? 'bg-teal-500/15 text-teal-600 ring-1 ring-teal-500/30'
+								: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+						onclick={() => chatStore.setWebSearchEnabled(!chatStore.webSearchEnabled)}
+					>
+						<GlobeIcon class="size-4" />
+						<span>Search</span>
+					</button>
 				</div>
 
 				<Button

@@ -20,6 +20,44 @@ let streaming = $state(false);
 // placeholder instead of popping in.
 let initialLoading = $state(true);
 
+// ── Composer state hoisted to the store ─────────────────────────────
+// These need to survive the first-message goto from `/` to `/chat/<id>`,
+// which unmounts ChatView and would otherwise reset local state. Same
+// reason `streaming` lives here.
+//
+// Web search and reasoning effort are also persisted to localStorage
+// (same pattern as the selected model and theme) so user preferences
+// survive page reloads. Capability-gated UI hides the controls when the
+// current model doesn't support the feature, but the underlying value
+// is retained — switching back to a compatible model brings it back.
+export type Effort = 'fast' | 'low' | 'medium' | 'high';
+
+const WEB_SEARCH_KEY = 'unichat_web_search';
+const EFFORT_KEY = 'unichat_effort';
+
+function readStoredWebSearch(): boolean {
+	if (typeof window === 'undefined') return false;
+	try {
+		return localStorage.getItem(WEB_SEARCH_KEY) === '1';
+	} catch {
+		return false;
+	}
+}
+
+function readStoredEffort(): Effort {
+	if (typeof window === 'undefined') return 'fast';
+	try {
+		const v = localStorage.getItem(EFFORT_KEY);
+		if (v === 'fast' || v === 'low' || v === 'medium' || v === 'high') return v;
+	} catch {
+		// privacy-mode / quota — fall through
+	}
+	return 'fast';
+}
+
+let webSearchEnabled = $state(readStoredWebSearch());
+let effort = $state<Effort>(readStoredEffort());
+
 // Pagination for the Others list (auth users only).
 let othersHasMore = $state(false);
 let othersLoadingMore = $state(false);
@@ -127,6 +165,32 @@ export const chatStore = {
 	},
 	setStreaming(value: boolean) {
 		streaming = value;
+	},
+	get webSearchEnabled() {
+		return webSearchEnabled;
+	},
+	setWebSearchEnabled(value: boolean) {
+		webSearchEnabled = value;
+		if (typeof window !== 'undefined') {
+			try {
+				localStorage.setItem(WEB_SEARCH_KEY, value ? '1' : '0');
+			} catch {
+				// ignore quota / privacy-mode errors
+			}
+		}
+	},
+	get effort() {
+		return effort;
+	},
+	setEffort(value: Effort) {
+		effort = value;
+		if (typeof window !== 'undefined') {
+			try {
+				localStorage.setItem(EFFORT_KEY, value);
+			} catch {
+				// ignore quota / privacy-mode errors
+			}
+		}
 	},
 
 	/** Push a message to the current array and trigger reactivity. */

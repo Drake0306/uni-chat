@@ -4,7 +4,10 @@ import { findModel } from '$lib/config/models.js';
 import { checkRateLimit, type Tier } from '$lib/server/rate-limit.js';
 import { getAuthUser, getServiceClient } from '$lib/server/supabase.js';
 import { accumulateAndSave } from '$lib/server/stream-persist.js';
+import { searchWeb, formatSearchContext } from '$lib/server/web-search.js';
 import type { RequestHandler } from './$types';
+
+type ChatMessage = { role: string; content: string };
 
 export const POST: RequestHandler = async ({ request, fetch }) => {
 	const body = await request.json();
@@ -52,15 +55,54 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 		return json({ error: `${model.name} requires a Pro subscription.` }, { status: 403 });
 	}
 
-	// Reasoning effort: paid tiers only. Free/guest get "fast" mode (no
-	// thinking param sent at all). Server-side gate so a spoofed request
-	// can't bypass tier limits.
-	const userIsPaid = tier === 'pro' || tier === 'max';
-	const wantsThinking = !!body.thinking && userIsPaid && !!model.effortLevels;
+	// Reasoning effort. Client picks Fast / Low / Medium / High. Fast omits
+	// the `thinking` flag entirely (the absence of the flag is the signal).
+	// Other levels enable thinking with that effort. No tier gating — quota
+	// pressure is handled by the rate limiter, not by hiding the feature.
+	const wantsThinking = !!body.thinking && model.capabilities.thinking;
 	const validEfforts = new Set(['low', 'medium', 'high']);
 	const effort: 'low' | 'medium' | 'high' = validEfforts.has(body.effort)
 		? body.effort
 		: 'medium';
+
+	// Web search: pre-injection via Tavily. We run a search, prepend the
+	// snippets to the most recent user message, and forward the augmented
+	// messages to the provider. See docs/web-search.md for the rationale.
+	//
+	// Config-level errors (no API key) fail loudly so the user sees a
+	// clear message in chat instead of a silent fall-through that just
+	// looks like the model can't access the web. Runtime failures (key
+	// is set but Tavily errored) still fall back silently — those are
+	// transient and shouldn't break the chat.
+	if (body.webSearch && !env.TAVILY_API_KEY) {
+		return json(
+			{
+				error:
+					'Web search is on but TAVILY_API_KEY is not configured. Add it to .env (free key at https://app.tavily.com/) and restart the dev server. Alternatively, turn the Search toggle off.',
+			},
+			{ status: 503 }
+		);
+	}
+
+	let outboundMessages: ChatMessage[] = messages;
+	if (body.webSearch) {
+		const lastIdx = (() => {
+			for (let i = messages.length - 1; i >= 0; i--) {
+				if (messages[i]?.role === 'user') return i;
+			}
+			return -1;
+		})();
+		const lastUser = lastIdx >= 0 ? messages[lastIdx] : null;
+		if (lastUser?.content) {
+			const results = await searchWeb(lastUser.content);
+			if (results) {
+				const augmented = formatSearchContext(results, lastUser.content);
+				outboundMessages = messages.map((m: ChatMessage, i: number) =>
+					i === lastIdx ? { ...m, content: augmented } : m
+				);
+			}
+		}
+	}
 
 	// Route to the correct provider endpoint using the model's internal route
 	const response = await fetch(model.route, {
@@ -68,7 +110,7 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			model: model.apiModelId,
-			messages,
+			messages: outboundMessages,
 			...(wantsThinking && { thinking: true, effort }),
 		}),
 	});

@@ -81,6 +81,20 @@ All except Qwen require a credit card. Qwen requires an Alibaba Cloud account.
 
 ---
 
+## Tavily (web search for the chat composer's Search toggle)
+
+- **What it unlocks:** the **Search** toggle in the chat composer. When on, server-side calls Tavily, prepends snippets to the user's message, and forwards the augmented prompt to the model. See `docs/web-search.md` for the architectural rationale and the comparison with native search paths (Gemini grounding, Anthropic web_search, etc.).
+- **Sign up:**
+  1. Go to <https://app.tavily.com/>.
+  2. Create an account (Google / GitHub OAuth or email).
+  3. From the dashboard, copy your API key (starts with `tvly-`).
+  4. Free tier: **1,000 searches per month** — comfortably covers dev. Paid plans start at $30/month for 4,000 monthly searches.
+- **`.env`:** `TAVILY_API_KEY=tvly-...`
+- **Without it:** the Search toggle is a visual no-op — the model answers without web context. No errors, no warnings, just no augmentation.
+- **Cost note:** every send with the toggle on burns one Tavily search. Flip the toggle off when you don't need it.
+
+---
+
 ## Artificial Analysis (benchmark data on the model detail page)
 
 - **What it unlocks:** Intelligence / Coding / Math indices and sub-benchmarks (MMLU-Pro, GPQA, SciCode, LiveCodeBench, MATH-500, AIME) on `/settings/models/[id]`.
@@ -110,6 +124,7 @@ All except Qwen require a credit card. Qwen requires an Alibaba Cloud account.
 2. Sign up for and paste in: **OPENROUTER_API_KEY**, **GEMINI_API_KEY**, **GROQ_API_KEY**, **MISTRAL_API_KEY** (free, no CC).
 3. Set up Supabase, paste **PUBLIC_SUPABASE_URL** + **PUBLIC_SUPABASE_ANON_KEY** + **SUPABASE_SERVICE_ROLE_KEY**, run migrations.
 4. (Optional but recommended) Sign up at Artificial Analysis Insights, paste **ARTIFICIAL_ANALYSIS_API_KEY**.
-5. `npm install && npm run dev`.
+5. (Optional but recommended) Sign up at Tavily, paste **TAVILY_API_KEY**.
+6. `npm install && npm run dev`.
 
-Skipping step 4 is fine for development — the model detail pages just show "Benchmark data not available."
+Skipping step 4 is fine — model detail pages just show "Benchmark data not available." Skipping step 5 is fine — the Search toggle silently no-ops.
