@@ -34,6 +34,7 @@
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
+	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
 	import type { Message } from '$lib/types.js';
 
 	let { chatId }: { chatId?: string } = $props();
@@ -67,9 +68,6 @@
 
 	const sidebar = useSidebar();
 
-	// Theme
-	type Theme = 'light' | 'dark' | 'auto';
-	let theme = $state<Theme>('auto');
 	let tempChatEnabled = $state(false);
 
 	// Switching temp mode in either direction resets the in-memory chat: temp
@@ -80,19 +78,6 @@
 		tempChatEnabled = !tempChatEnabled;
 		chatStore.clearActive();
 		goto('/', { replaceState: true });
-	}
-
-	function applyTheme(t: Theme) {
-		theme = t;
-		if (t === 'dark') {
-			document.documentElement.classList.add('dark');
-		} else if (t === 'light') {
-			document.documentElement.classList.remove('dark');
-		} else {
-			// Auto: follow system preference
-			const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-			document.documentElement.classList.toggle('dark', prefersDark);
-		}
 	}
 
 	const messages = $derived(chatStore.messages);
@@ -466,8 +451,8 @@
 						<p class="text-sm font-semibold">Theme</p>
 						<ToggleGroup.Root
 							type="single"
-							value={theme}
-							onValueChange={(v) => { if (v) applyTheme(v as Theme); }}
+							value={themeStore.value}
+							onValueChange={(v) => { if (v) themeStore.set(v as Theme); }}
 							class="w-full"
 						>
 							<ToggleGroup.Item value="light" class="flex-1 gap-1.5 text-xs">
@@ -487,7 +472,10 @@
 						<Separator />
 
 						<!-- Settings link -->
-						<button class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground">
+						<button
+							class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
+							onclick={() => goto('/settings')}
+						>
 							<SettingsIcon class="size-4" />
 							Settings
 						</button>

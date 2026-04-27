@@ -603,7 +603,7 @@
 							{/snippet}
 						</DropdownMenu.Trigger>
 						<DropdownMenu.Content align="start" side="top" class="w-48" sideOffset={8}>
-							<DropdownMenu.Item onSelect={() => {}}>
+							<DropdownMenu.Item onSelect={() => goto('/settings')}>
 								<SettingsIcon class="mr-2 size-4" />
 								Settings
 							</DropdownMenu.Item>
