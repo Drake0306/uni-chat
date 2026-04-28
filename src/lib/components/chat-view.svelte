@@ -88,6 +88,13 @@
 	let loading = $state(false);
 	let textareaEl: HTMLTextAreaElement | null = $state(null);
 
+	// True while we're navigating into a chat whose data hasn't arrived yet:
+	// the URL says /chat/<id> but chatStore.activeChat is still the previous
+	// chat (or null on a fresh page load). Used to fade+blur the messages
+	// pane during the loadChat round-trip — same pattern the sidebar uses
+	// for its initial-load skeleton.
+	const loadingChat = $derived(!!chatId && chatStore.activeChat?.id !== chatId);
+
 	// Persist the user's model choice across "New Chat" / page reloads via
 	// localStorage. Validates on load (model may have been disabled or removed
 	// from config since the last visit) and falls back to the default.
@@ -571,8 +578,14 @@
 		</div>
 	</div>
 
-	<!-- Messages -->
-	<div class="flex-1 overflow-y-auto">
+	<!-- Messages. Blur+fade while loadingChat so the user sees the same
+	     "thinking..." treatment the sidebar uses, instead of a flash of the
+	     previous chat or an empty state, while loadChat() resolves. -->
+	<div
+		class="flex-1 overflow-y-auto transition-[filter,opacity] duration-500 ease-out"
+		class:blur-md={loadingChat}
+		class:opacity-60={loadingChat}
+	>
 		{#if messages.length === 0}
 			<div class="relative flex h-full items-start justify-center px-2 pt-20 pb-32 sm:items-center sm:px-0 sm:pt-0">
 				<!-- "Press Enter to start your chat" hint. Absolute-positioned over
@@ -726,7 +739,7 @@
 	</div>
 
 	<!-- Composer -->
-	<div class="px-2 pb-3 sm:px-4 sm:pb-4">
+	<div class="px-3 pb-4 sm:px-6 sm:pb-6">
 		<div class="mx-auto max-w-3xl rounded-2xl bg-muted/30 p-2 sm:p-3">
 			<!-- Hidden file picker. Triggered by the "Attach" button below. -->
 			<input

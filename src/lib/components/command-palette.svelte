@@ -451,3 +451,22 @@
 		</button>
 	</div>
 </Command.Dialog>
+
+<!-- Override Command.Input's defaults: shadcn-svelte's Command.Input wraps
+     the input in an InputGroup that hard-codes `h-8!` (32px) with rounded-lg
+     and the inner input defaults to text-sm (14px). That makes the palette's
+     search bar feel small. Bump it to a 48px field with text-base (16px) so
+     it visually matches the chat textarea. Scoped to data-slot attributes
+     so it affects Command.Input only. -->
+<style>
+	:global([data-slot='command-input-wrapper']) {
+		padding: 0.625rem 0.75rem 0.5rem 0.75rem;
+	}
+	:global([data-slot='command-input-wrapper'] [data-slot='input-group']) {
+		height: 3rem !important;
+		border-radius: 0.75rem !important;
+	}
+	:global([data-slot='command-input']) {
+		font-size: 1rem !important;
+	}
+</style>

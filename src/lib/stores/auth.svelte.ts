@@ -6,6 +6,18 @@ let session = $state<Session | null>(null);
 let loading = $state(true);
 let tier = $state<'guest' | 'free' | 'pro' | 'max'>('guest');
 let pendingSyncDecision = $state(false);
+// Set true when SIGNED_OUT fires unexpectedly (refresh-token failure /
+// session revoked / token expired without a working refresh) so the UI
+// can prompt the user to sign in again. Distinguished from a user-initiated
+// sign-out via the _userInitiatedSignOut flag below.
+let sessionExpired = $state(false);
+// Tracks whether we've ever observed a valid session in this tab. Lets us
+// tell apart "fresh-load with no session" (no prompt) from "had a session,
+// then lost it" (prompt).
+let _wasAuthenticated = false;
+// Set by signOut() before awaiting so the onAuthStateChange SIGNED_OUT
+// handler can suppress the expiration prompt when the user clicked Sign out.
+let _userInitiatedSignOut = false;
 
 // Single auth listener — handles INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED
 // IMPORTANT: This callback is awaited by _notifyAllSubscribers inside _initialize().
@@ -18,6 +30,13 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 	session = sess;
 	user = sess?.user ?? null;
 	loading = false;
+
+	if (sess) {
+		// Any time we observe a real session, mark this tab as having been
+		// authenticated. Used by the SIGNED_OUT branch below to tell apart
+		// "session expired" from "fresh-load with no session".
+		_wasAuthenticated = true;
+	}
 
 	if (user) {
 		// Fire-and-forget — does NOT block the callback
@@ -52,6 +71,17 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 			// Corrupt JSON — ignore, don't prompt
 		}
 	}
+
+	// Detect unexpected session loss (refresh-token failure, server-side
+	// revoke, expiry past the refresh window). User-initiated sign-out
+	// suppresses this via the _userInitiatedSignOut flag set in signOut().
+	if (_event === 'SIGNED_OUT') {
+		if (_wasAuthenticated && !_userInitiatedSignOut) {
+			sessionExpired = true;
+		}
+		_wasAuthenticated = false;
+		_userInitiatedSignOut = false;
+	}
 });
 
 export const authStore = {
@@ -75,6 +105,12 @@ export const authStore = {
 	},
 	clearSyncDecision() {
 		pendingSyncDecision = false;
+	},
+	get sessionExpired() {
+		return sessionExpired;
+	},
+	acknowledgeSessionExpired() {
+		sessionExpired = false;
 	},
 
 	get displayName() {
@@ -100,8 +136,15 @@ export const authStore = {
 	},
 
 	async signOut() {
+		// Mark before awaiting so the onAuthStateChange SIGNED_OUT handler
+		// suppresses the expired-session prompt (this isn't an unexpected
+		// expiry — the user clicked the button).
+		_userInitiatedSignOut = true;
 		const { error } = await supabase.auth.signOut();
-		if (error) console.error('Sign out error:', error.message);
+		if (error) {
+			console.error('Sign out error:', error.message);
+			_userInitiatedSignOut = false;
+		}
 	},
 
 	getAccessToken(): string | undefined {
