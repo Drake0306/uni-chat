@@ -55,7 +55,13 @@
 	});
 
 	function goToTab(id: TabId) {
-		goto(id === 'account' ? '/settings' : `/settings?tab=${id}`);
+		// noScroll: true preserves the user's scroll position across the
+		// ?tab= URL change. Without it, SvelteKit's default scroll-to-top on
+		// navigation pushes the tab strip out of view on mobile (where the
+		// left-rail cards stack above it), forcing a re-scroll on every tap.
+		goto(id === 'account' ? '/settings' : `/settings?tab=${id}`, {
+			noScroll: true,
+		});
 	}
 
 	// ── Auth gate ───────────────────────────────────────────

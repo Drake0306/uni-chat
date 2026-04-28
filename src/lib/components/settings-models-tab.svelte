@@ -16,7 +16,8 @@
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import KeyIcon from '@lucide/svelte/icons/key';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
-	import { companies, iconUrl, capabilityLabels, type Model } from '$lib/config/models.js';
+	import Icon from '$lib/components/icon.svelte';
+	import { companies, capabilityLabels, type Model } from '$lib/config/models.js';
 	import { selectionsStore } from '$lib/stores/model-selections.svelte.js';
 
 	// ── Local UI state ──────────────────────────────────────────
@@ -283,9 +284,10 @@
 			<div class="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/30">
 				<a
 					href="/settings/models/{m.id}"
+					data-sveltekit-noscroll
 					class="flex min-w-0 flex-1 items-center gap-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card rounded-md"
 				>
-					<img src={iconUrl(m.icon)} alt="" class="size-7 shrink-0 rounded" />
+					<Icon name={m.icon} class="size-7 shrink-0 rounded" />
 					<div class="min-w-0 flex-1">
 						<div class="flex flex-wrap items-center gap-2">
 							<span class="font-semibold">{m.name}</span>
@@ -340,9 +342,10 @@
 				</div>
 				<a
 					href="/settings/models/{m.id}"
+					data-sveltekit-noscroll
 					class="flex flex-1 flex-col p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
 				>
-					<img src={iconUrl(m.icon)} alt="" class="size-8 rounded" />
+					<Icon name={m.icon} class="size-8 rounded" />
 					<h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-tight">{m.name}</h3>
 					<div class="mt-2 flex flex-wrap items-center gap-1.5">
 						{#if m.priceTier}

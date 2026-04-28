@@ -18,7 +18,8 @@
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import SigmaIcon from '@lucide/svelte/icons/sigma';
 	import CalculatorIcon from '@lucide/svelte/icons/calculator';
-	import { companies, iconUrl, PROVIDERS, type Model } from '$lib/config/models.js';
+	import Icon from '$lib/components/icon.svelte';
+	import { companies, PROVIDERS, type Model } from '$lib/config/models.js';
 	import { selectionsStore } from '$lib/stores/model-selections.svelte.js';
 
 	type Benchmarks = {
@@ -104,7 +105,7 @@
 <div class="mb-4 flex items-start gap-3">
 	<button
 		class="flex size-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-		onclick={() => goto('/settings?tab=models')}
+		onclick={() => goto('/settings?tab=models', { noScroll: true })}
 		aria-label="Back to Models"
 	>
 		<ArrowLeftIcon class="size-5" />
@@ -127,7 +128,7 @@
 	<div class="rounded-xl border bg-card p-6">
 		<!-- Title row -->
 		<div class="flex items-start gap-4">
-			<img src={iconUrl(model.icon)} alt="" class="size-12 shrink-0 rounded-lg" />
+			<Icon name={model.icon} class="size-12 shrink-0 rounded-lg" />
 			<div class="min-w-0 flex-1">
 				<div class="flex flex-wrap items-center gap-2">
 					<h2 class="text-xl font-bold">{model.name}</h2>

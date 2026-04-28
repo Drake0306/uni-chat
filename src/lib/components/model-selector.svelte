@@ -18,7 +18,8 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
-	import { companies, iconUrl, hasEnabledModels, capabilityLabels, PROVIDERS, type Company, type Model } from '$lib/config/models.js';
+	import Icon from '$lib/components/icon.svelte';
+	import { companies, hasEnabledModels, capabilityLabels, PROVIDERS, type Company, type Model } from '$lib/config/models.js';
 	import { selectionsStore } from '$lib/stores/model-selections.svelte.js';
 
 	let {
@@ -110,34 +111,30 @@
 </script>
 
 {#snippet capabilityBadges(model: Model)}
-	<div class="mt-1.5 flex flex-wrap items-center gap-1">
+	<div class="mt-1 flex flex-wrap items-center gap-0.5 sm:mt-1.5 sm:gap-1">
 		{#if model.capabilities.thinking}
-			<Badge class="h-4 gap-0.5 border-0 bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-600"><BrainIcon class="size-2.5" />Thinking</Badge>
+			<Badge class="h-4 gap-0.5 border-0 bg-violet-500/15 px-1 text-[10px] font-medium text-violet-600 sm:px-1.5"><BrainIcon class="size-2.5" />Thinking</Badge>
 		{/if}
 		{#if model.capabilities.vision}
-			<Badge class="h-4 gap-0.5 border-0 bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600"><EyeIcon class="size-2.5" />Vision</Badge>
+			<Badge class="h-4 gap-0.5 border-0 bg-blue-500/15 px-1 text-[10px] font-medium text-blue-600 sm:px-1.5"><EyeIcon class="size-2.5" />Vision</Badge>
 		{/if}
 		{#if model.capabilities.tools}
-			<Badge class="h-4 gap-0.5 border-0 bg-orange-500/15 px-1.5 text-[10px] font-medium text-orange-600"><WrenchIcon class="size-2.5" />Tools</Badge>
+			<Badge class="h-4 gap-0.5 border-0 bg-orange-500/15 px-1 text-[10px] font-medium text-orange-600 sm:px-1.5"><WrenchIcon class="size-2.5" />Tools</Badge>
 		{/if}
 		{#if model.capabilities.webSearch}
-			<Badge class="h-4 gap-0.5 border-0 bg-teal-500/15 px-1.5 text-[10px] font-medium text-teal-600"><GlobeIcon class="size-2.5" />Search</Badge>
+			<Badge class="h-4 gap-0.5 border-0 bg-teal-500/15 px-1 text-[10px] font-medium text-teal-600 sm:px-1.5"><GlobeIcon class="size-2.5" />Search</Badge>
 		{/if}
 		{#if model.capabilities.files}
-			<Badge class="h-4 gap-0.5 border-0 bg-pink-500/15 px-1.5 text-[10px] font-medium text-pink-600"><PaperclipIcon class="size-2.5" />Files</Badge>
+			<Badge class="h-4 gap-0.5 border-0 bg-pink-500/15 px-1 text-[10px] font-medium text-pink-600 sm:px-1.5"><PaperclipIcon class="size-2.5" />Files</Badge>
 		{/if}
 		{#if model.capabilities.imageGeneration}
-			<Badge class="h-4 gap-0.5 border-0 bg-rose-500/15 px-1.5 text-[10px] font-medium text-rose-600"><ImageIcon class="size-2.5" />Image</Badge>
+			<Badge class="h-4 gap-0.5 border-0 bg-rose-500/15 px-1 text-[10px] font-medium text-rose-600 sm:px-1.5"><ImageIcon class="size-2.5" />Image</Badge>
 		{/if}
 		<span class="text-[10px] text-muted-foreground">{model.contextWindow} ctx</span>
 	</div>
-	<div class="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+	<div class="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground sm:mt-1">
 		<span>via</span>
-		<img
-			src={iconUrl(PROVIDERS[model.provider].icon)}
-			alt=""
-			class="size-3"
-		/>
+		<Icon name={PROVIDERS[model.provider].icon} class="size-3" />
 		<span class="font-medium">{PROVIDERS[model.provider].name}</span>
 	</div>
 {/snippet}
@@ -235,11 +232,7 @@
 													: 'hover:bg-muted'}"
 											onclick={() => { activeCompany = company; search = ''; }}
 										>
-											<img
-												src={iconUrl(company.icon)}
-												alt={company.name}
-												class="size-6"
-											/>
+											<Icon name={company.icon} alt={company.name} class="size-6" />
 										</button>
 									{/snippet}
 								</Tooltip.Trigger>
@@ -265,7 +258,7 @@
 						{#each allFilteredCompanies()! as company}
 							<div class="mb-5">
 								<div class="mb-3 flex items-center gap-2 px-1">
-									<img src={iconUrl(company.icon)} alt="" class="size-5 {hasEnabledModels(company) ? '' : 'grayscale opacity-50'}" />
+									<Icon name={company.icon} class="size-5 {hasEnabledModels(company) ? '' : 'grayscale opacity-50'}" />
 									<span class="text-sm font-semibold text-muted-foreground">{company.name}</span>
 									{#if !hasEnabledModels(company)}
 										<LockIcon class="size-3 text-muted-foreground" />
@@ -275,12 +268,12 @@
 									{#each company.models as model}
 										{@const disabled = !model.enabled}
 										<button
-											class="flex items-start gap-3 rounded-xl border border-transparent p-3 text-left transition-colors
+											class="flex items-start rounded-xl border border-transparent p-2 text-left transition-colors sm:gap-3 sm:p-3
 												{disabled ? 'opacity-40 cursor-default' : 'hover:bg-muted'}
 												{selected.modelId === model.id && selected.companyId === company.id ? 'bg-muted border-primary/20' : ''}"
 											onclick={() => selectModel(company, model)}
 										>
-											<img src={iconUrl(model.icon)} alt="" class="mt-0.5 size-7 shrink-0 {disabled ? 'grayscale' : ''}" />
+											<Icon name={model.icon} class="mt-0.5 hidden size-7 shrink-0 sm:block {disabled ? 'grayscale' : ''}" />
 											<div class="min-w-0 flex-1">
 												<div class="flex items-center gap-1.5">
 													<span class="text-sm font-semibold">{model.name}</span>
@@ -309,7 +302,7 @@
 					{:else}
 						{@const hasEnabled = hasEnabledModels(activeCompany)}
 						<div class="mb-4 flex items-center gap-2.5 px-1">
-							<img src={iconUrl(activeCompany.icon)} alt="" class="size-7 {hasEnabled ? '' : 'grayscale opacity-50'}" />
+							<Icon name={activeCompany.icon} class="size-7 {hasEnabled ? '' : 'grayscale opacity-50'}" />
 							<span class="text-base font-semibold">{activeCompany.name}</span>
 							{#if !hasEnabled}
 								<Badge class="h-5 border-0 bg-muted px-2 text-[10px] font-semibold text-muted-foreground">Pro</Badge>
@@ -328,12 +321,12 @@
 							{#each filteredModels() as model}
 								{@const disabled = !model.enabled}
 								<button
-									class="flex items-start gap-3 rounded-xl border border-transparent p-3.5 text-left transition-colors
+									class="flex items-start rounded-xl border border-transparent p-2.5 text-left transition-colors sm:gap-3 sm:p-3.5
 										{disabled ? 'opacity-40 cursor-default' : 'hover:bg-muted'}
 										{selected.modelId === model.id && selected.companyId === activeCompany.id ? 'bg-muted border-primary/20' : ''}"
 									onclick={() => selectModel(activeCompany, model)}
 								>
-									<img src={iconUrl(model.icon)} alt="" class="mt-0.5 size-8 shrink-0 {disabled ? 'grayscale' : ''}" />
+									<Icon name={model.icon} class="mt-0.5 hidden size-8 shrink-0 sm:block {disabled ? 'grayscale' : ''}" />
 									<div class="min-w-0 flex-1">
 										<div class="flex items-center gap-1.5">
 											<span class="text-sm font-semibold">{model.name}</span>

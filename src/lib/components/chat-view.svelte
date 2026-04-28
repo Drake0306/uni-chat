@@ -20,7 +20,7 @@
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import MonitorIcon from '@lucide/svelte/icons/monitor';
 	import { goto } from '$app/navigation';
-	import { untrack } from 'svelte';
+	import { untrack, tick } from 'svelte';
 	import { useSidebar } from '$lib/components/ui/sidebar/index.js';
 	import * as Popover from '$lib/components/ui/popover/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
@@ -86,6 +86,7 @@
 	const messages = $derived(chatStore.messages);
 	let input = $state('');
 	let loading = $state(false);
+	let textareaEl: HTMLTextAreaElement | null = $state(null);
 
 	// Persist the user's model choice across "New Chat" / page reloads via
 	// localStorage. Validates on load (model may have been disabled or removed
@@ -249,8 +250,15 @@
 	type Category = keyof typeof suggestions;
 	let activeCategory = $state<Category>('Explore');
 
-	function useSuggestion(text: string) {
-		handleSend(text);
+	// Suggestions populate the composer instead of auto-sending so the user
+	// can edit the prompt before submitting. After tick() the textarea has
+	// the new value bound; setSelectionRange moves the cursor to the end so
+	// typing extends the prompt rather than replacing the selection.
+	async function useSuggestion(text: string) {
+		input = text;
+		await tick();
+		textareaEl?.focus();
+		textareaEl?.setSelectionRange(text.length, text.length);
 	}
 
 	$effect(() => {
@@ -566,8 +574,43 @@
 	<!-- Messages -->
 	<div class="flex-1 overflow-y-auto">
 		{#if messages.length === 0}
-			<div class="flex h-full items-start justify-center px-2 pt-20 pb-32 sm:items-center sm:px-0 sm:pt-0">
-				<div class="w-full max-w-2xl px-4">
+			<div class="relative flex h-full items-start justify-center px-2 pt-20 pb-32 sm:items-center sm:px-0 sm:pt-0">
+				<!-- "Press Enter to start your chat" hint. Absolute-positioned over
+				     the same area so it cross-fades with the suggestion block when
+				     the composer has text. The kbd has a continuous bob animation
+				     to subtly draw the eye toward the action. -->
+				<div
+					class="pointer-events-none absolute inset-0 flex items-center justify-center px-4 transition-opacity duration-300 ease-out {input.trim()
+						? 'opacity-100'
+						: 'opacity-0'}"
+				>
+					<!-- Two-line stack on mobile (Press [Enter] / to start your chat),
+					     single-line on sm:+ where horizontal space allows. Sizes bump
+					     up from text-lg → text-2xl on desktop, kbd scales to match. -->
+					<div
+						class="flex flex-col items-center gap-2 text-center text-lg font-medium text-muted-foreground sm:flex-row sm:gap-2.5 sm:text-2xl"
+					>
+						<span class="flex items-center gap-2 sm:gap-2.5">
+							<span>Press</span>
+							<kbd
+								class="press-enter-kbd inline-flex h-8 min-w-10 items-center justify-center rounded-md border border-border bg-muted px-2.5 text-sm font-semibold text-foreground sm:h-10 sm:min-w-12 sm:px-3 sm:text-base"
+							>
+								Enter
+							</kbd>
+						</span>
+						<span>to start your chat</span>
+					</div>
+				</div>
+
+				<!-- Empty-state intro fades when the composer has text. Re-fades-in
+				     when the user clears the composer back to empty. pointer-events
+				     suppression while faded prevents stray clicks on suggestions
+				     mid-fade. -->
+				<div
+					class="w-full max-w-2xl px-4 transition-opacity duration-300 ease-out {input.trim()
+						? 'pointer-events-none opacity-0'
+						: 'opacity-100'}"
+				>
 					{#if tempChatEnabled}
 						<h2 class="flex items-center gap-2 text-2xl font-semibold sm:gap-2.5 sm:text-3xl">
 							<MessageSquareDashedIcon class="size-6 text-muted-foreground sm:size-7" />
@@ -717,6 +760,7 @@
 
 			<!-- Textarea -->
 			<Textarea
+				bind:ref={textareaEl}
 				bind:value={input}
 				placeholder="Send a message..."
 				class="max-h-50 min-h-25 resize-none border-0 bg-transparent px-1 py-2 text-base shadow-none focus-visible:ring-0 md:text-base"
@@ -1051,5 +1095,19 @@
 	@keyframes slide-in-right {
 		0% { opacity: 0; transform: translateX(100%); }
 		100% { opacity: 1; transform: translateX(0); }
+	}
+	.press-enter-kbd {
+		box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+		animation: press-enter-bob 1.8s ease-in-out infinite;
+	}
+	@keyframes press-enter-bob {
+		0%, 100% {
+			transform: translateY(0);
+			box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+		}
+		50% {
+			transform: translateY(-3px);
+			box-shadow: 0 6px 14px rgb(0 0 0 / 0.08);
+		}
 	}
 </style>

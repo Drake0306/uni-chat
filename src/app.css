@@ -161,4 +161,11 @@
 		max-height: 100dvh;
 		overflow: hidden;
 	}
+
+	/* Hide all tooltips on mobile. Tap doesn't equal hover, and the tooltip
+	 * primitive's "open on focus" behavior leaves them lingering over the
+	 * UI after a tap. Buttons still carry title= and aria-label= for a11y. */
+	[data-slot='tooltip-content'] {
+		display: none !important;
+	}
 }
