@@ -30,6 +30,7 @@
 	import GoogleIcon from '$lib/components/google-icon.svelte';
 
 	const isMac = browser && /Mac/i.test(navigator.userAgent);
+	let avatarLoadFailed = $state(false);
 
 	// Load chats once after auth resolves. Sign-in/out cleanup is handled
 	// explicitly in the dropdown handlers below — keeping it imperative avoids
@@ -588,8 +589,14 @@
 									{...props}
 									class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent"
 								>
-									{#if authStore.avatarUrl}
-										<img src={authStore.avatarUrl} alt="" class="size-7 rounded-full" />
+									{#if authStore.avatarUrl && !avatarLoadFailed}
+										<img
+											src={authStore.avatarUrl}
+											alt=""
+											class="size-7 rounded-full"
+											referrerpolicy="no-referrer"
+											onerror={() => (avatarLoadFailed = true)}
+										/>
 									{:else}
 										<div class="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
 											{authStore.displayName?.[0]?.toUpperCase() ?? '?'}

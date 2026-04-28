@@ -91,6 +91,7 @@
 	let tabStripEl: HTMLDivElement | undefined = $state();
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
+	let avatarLoadFailed = $state(false);
 
 	function checkTabScroll() {
 		if (!tabStripEl) return;
@@ -118,11 +119,13 @@
 				<aside class="space-y-4 md:sticky md:top-8 md:self-start">
 					<!-- Profile card -->
 					<div class="rounded-xl border bg-card p-6 text-center">
-						{#if authStore.avatarUrl}
+						{#if authStore.avatarUrl && !avatarLoadFailed}
 							<img
 								src={authStore.avatarUrl}
 								alt=""
 								class="mx-auto size-24 rounded-full object-cover"
+								referrerpolicy="no-referrer"
+								onerror={() => (avatarLoadFailed = true)}
 							/>
 						{:else}
 							<div
