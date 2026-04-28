@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -17,9 +17,9 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import * as ContextMenu from '$lib/components/ui/context-menu/index.js';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
-	import * as Command from '$lib/components/ui/command/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
+	import CommandPalette from '$lib/components/command-palette.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
@@ -303,50 +303,6 @@
 		return () => observer.disconnect();
 	});
 
-	// Server-side search for the Cmd+K palette. Debounced 300ms.
-	let searchQuery = $state('');
-	let searchResults = $state<Chat[]>([]);
-	let searchLoading = $state(false);
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
-
-	// Split search results so the palette can render Pinned and Other groups.
-	const searchPinned = $derived(searchResults.filter((c) => c.pinned));
-	const searchOther = $derived(searchResults.filter((c) => !c.pinned));
-
-	// Top recents shown when the search is empty (excludes pinned, shown separately).
-	const recentForPalette = $derived(
-		[...chatStore.todayChats, ...chatStore.otherChats].slice(0, 10)
-	);
-
-	$effect(() => {
-		const q = searchQuery;
-		untrack(() => {
-			if (searchTimer) clearTimeout(searchTimer);
-			if (!q.trim()) {
-				searchResults = [];
-				searchLoading = false;
-				return;
-			}
-			searchLoading = true;
-			searchTimer = setTimeout(async () => {
-				const results = await chatStore.searchChats(q);
-				if (searchQuery === q) {
-					searchResults = results;
-					searchLoading = false;
-				}
-			}, 300);
-		});
-	});
-
-	// Reset search when the palette closes.
-	$effect(() => {
-		if (commandStore.open) return;
-		untrack(() => {
-			searchQuery = '';
-			searchResults = [];
-			searchLoading = false;
-		});
-	});
 </script>
 
 {#snippet placeholderRow(title: string)}
@@ -644,89 +600,8 @@
 	<Sidebar.SidebarRail />
 </Sidebar.Sidebar>
 
-<!-- Command palette (Cmd+K / Ctrl+K) -->
-<Command.Dialog
-	bind:open={commandStore.open}
-	shouldFilter={false}
-	class="top-4! max-w-[calc(100%-1rem)]! sm:top-1/3! sm:max-w-2xl!"
->
-	<Command.Input
-		bind:value={searchQuery}
-		placeholder="Search conversations..."
-		class="h-14 text-base"
-	/>
-	<Command.List class="max-h-120">
-		{#if searchQuery.trim()}
-			{#if searchLoading}
-				<div class="px-4 py-6 text-center text-sm text-muted-foreground">Searching…</div>
-			{:else if searchResults.length === 0}
-				<Command.Empty>No conversations found.</Command.Empty>
-			{:else}
-				{#if searchPinned.length > 0}
-					<Command.Group heading="Pinned">
-						{#each searchPinned as chat (chat.id)}
-							<Command.Item
-								value={chat.id}
-								onSelect={() => selectChat(chat)}
-								class="gap-2 pl-5 py-2 text-[13px]"
-							>
-								<PinIcon class="size-3.5 shrink-0 text-muted-foreground" />
-								<span class="truncate">{chat.title}</span>
-							</Command.Item>
-						{/each}
-					</Command.Group>
-				{/if}
-				{#if searchPinned.length > 0 && searchOther.length > 0}
-					<Command.Separator />
-				{/if}
-				{#if searchOther.length > 0}
-					<Command.Group heading="Conversations">
-						{#each searchOther as chat (chat.id)}
-							<Command.Item
-								value={chat.id}
-								onSelect={() => selectChat(chat)}
-								class="pl-5 py-2 text-[13px]"
-							>
-								<span class="truncate">{chat.title}</span>
-							</Command.Item>
-						{/each}
-					</Command.Group>
-				{/if}
-			{/if}
-		{:else}
-			{#if chatStore.pinnedChats.length > 0}
-				<Command.Group heading="Pinned">
-					{#each chatStore.pinnedChats.slice(0, 10) as chat (chat.id)}
-						<Command.Item
-							value={chat.id}
-							onSelect={() => selectChat(chat)}
-							class="gap-2 pl-5 py-2 text-[13px]"
-						>
-							<PinIcon class="size-3.5 shrink-0 text-muted-foreground" />
-							<span class="truncate">{chat.title}</span>
-						</Command.Item>
-					{/each}
-				</Command.Group>
-			{/if}
-			{#if chatStore.pinnedChats.length > 0 && recentForPalette.length > 0}
-				<Command.Separator />
-			{/if}
-			{#if recentForPalette.length > 0}
-				<Command.Group heading="Recent">
-					{#each recentForPalette as chat (chat.id)}
-						<Command.Item
-							value={chat.id}
-							onSelect={() => selectChat(chat)}
-							class="pl-5 py-2 text-[13px]"
-						>
-							<span class="truncate">{chat.title}</span>
-						</Command.Item>
-					{/each}
-				</Command.Group>
-			{/if}
-		{/if}
-	</Command.List>
-</Command.Dialog>
+<!-- Command palette (Cmd+K / Ctrl+K) — owns its own search/state internally. -->
+<CommandPalette bind:open={commandStore.open} />
 
 <!-- Confirm permanent delete -->
 <Dialog.Root
