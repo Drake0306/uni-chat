@@ -27,7 +27,6 @@
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
 	import { findModel, getDefaultModel } from '$lib/config/models.js';
-	import GoogleIcon from '$lib/components/google-icon.svelte';
 
 	const isMac = browser && /Mac/i.test(navigator.userAgent);
 	let avatarLoadFailed = $state(false);
@@ -633,10 +632,9 @@
 					<Button
 						variant="outline"
 						class="w-full justify-center gap-2 text-sm font-semibold"
-						onclick={() => authStore.signInWithGoogle()}
+						onclick={() => goto('/login')}
 					>
-						<GoogleIcon class="size-4" />
-						Sign in with Google
+						Sign in
 					</Button>
 				{/if}
 			</div>

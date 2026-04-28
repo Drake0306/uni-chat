@@ -14,8 +14,11 @@
 	let { children } = $props();
 
 	// Settings is a full-viewport route — opt out of the app sidebar so the
-	// page can render its own left rail without competing chrome.
-	const fullViewport = $derived(page.url.pathname.startsWith('/settings'));
+	// page can render its own left rail without competing chrome. /login is
+	// also full-viewport so the sign-in card has the screen to itself.
+	const fullViewport = $derived(
+		page.url.pathname.startsWith('/settings') || page.url.pathname.startsWith('/login')
+	);
 
 	// Hydrate the per-user model selections whenever auth state stabilizes.
 	// Fires on initial mount (after authStore.loading flips false) and again

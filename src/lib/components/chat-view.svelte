@@ -27,6 +27,7 @@
 	import * as ToggleGroup from '$lib/components/ui/toggle-group/index.js';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import ModelSelector from '$lib/components/model-selector.svelte';
@@ -151,9 +152,21 @@
 	let attachedFiles = $state<File[]>([]);
 	let fileInputEl: HTMLInputElement | undefined = $state();
 
+	// Mobile-only consolidated "Tools" popover. Two views swapped in place:
+	// 'main' lists Reasoning / Attach / Search rows, 'reasoning' shows the
+	// 4 effort options. Reset to 'main' whenever the popover closes so the
+	// next open starts on the row list.
+	let toolsOpen = $state(false);
+	let toolsView = $state<'main' | 'reasoning'>('main');
+
 	const currentModel = $derived(findModel(selectedModel.companyId, selectedModel.modelId));
 	const showEffortPicker = $derived(!!currentModel?.capabilities.thinking);
 	const thinkingActive = $derived(effort !== 'fast');
+	// Tints the mobile Tools pill when any tool is on, so users can see at a
+	// glance that a non-default behavior is active without opening the popover.
+	const anyToolActive = $derived(
+		webSearchEnabled || attachedFiles.length > 0 || (showEffortPicker && thinkingActive)
+	);
 
 	// Guests are gated out of search, file upload, and non-Fast reasoning
 	// effort. The buttons still render so the affordance is visible — just
@@ -716,113 +729,262 @@
 				<ModelSelector bind:selected={selectedModel} />
 
 				<div class="flex flex-1 items-center justify-end gap-1.5">
-					{#if showEffortPicker}
-						<DropdownMenu.Root>
-							<DropdownMenu.Trigger>
-								{#snippet child({ props })}
-									<button
-										{...props}
-										class="capability-toggle flex items-center gap-1 rounded-full px-2 py-1.5 text-sm font-semibold transition-all sm:gap-1.5 sm:px-2.5
-											{thinkingActive
-												? 'bg-violet-500/15 text-violet-600 ring-1 ring-violet-500/30'
-												: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-										title="Reasoning effort"
-									>
-										<BrainIcon class="size-4" />
-										<span class="hidden capitalize sm:inline">{effort}</span>
-										<ChevronDownIcon class="hidden size-3 sm:inline" />
-									</button>
-								{/snippet}
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Content align="end" class="w-36">
-								<DropdownMenu.RadioGroup
-									value={effort}
-									onValueChange={(v) => {
-										if (isGuest) return;
-										if (v === 'fast' || v === 'low' || v === 'medium' || v === 'high') {
-											chatStore.setEffort(v);
-										}
-									}}
+					<!-- Mobile-only consolidated Tools popover. Replaces the icon-only
+					     Reasoning / Attach / Search trio at <sm: where unlabeled icons
+					     are illegible. Two views swap in place: 'main' lists the tools,
+					     'reasoning' shows the 4 effort options. -->
+					<Popover.Root
+						open={toolsOpen}
+						onOpenChange={(o) => {
+							toolsOpen = o;
+							if (!o) toolsView = 'main';
+						}}
+					>
+						<Popover.Trigger>
+							{#snippet child({ props })}
+								<button
+									{...props}
+									class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all sm:hidden
+										{anyToolActive
+											? 'bg-primary/15 text-primary ring-1 ring-primary/30'
+											: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+									aria-label="Tools"
+									aria-expanded={toolsOpen}
 								>
-									<DropdownMenu.RadioItem value="fast">Fast</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem value="low" disabled={isGuest}>
-										<span class="flex w-full items-center justify-between">
-											<span>Low</span>
+									Tools
+									<ChevronDownIcon
+										class="size-4 transition-transform duration-200 ease-out {toolsOpen ? 'rotate-0' : 'rotate-180'}"
+									/>
+								</button>
+							{/snippet}
+						</Popover.Trigger>
+						<Popover.Content side="top" align="end" sideOffset={8} class="w-72 p-1.5">
+							{#if toolsView === 'main'}
+								<div class="space-y-0.5">
+									{#if showEffortPicker}
+										<button
+											class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted"
+											onclick={() => (toolsView = 'reasoning')}
+										>
+											<BrainIcon class="size-4 shrink-0 {thinkingActive ? 'text-violet-600' : 'text-muted-foreground'}" />
+											<div class="flex flex-1 flex-col">
+												<span class="text-sm font-semibold">Reasoning effort</span>
+												<span class="text-xs text-muted-foreground">How hard the model thinks</span>
+											</div>
+											<span class="text-xs font-semibold capitalize text-muted-foreground">{effort}</span>
+										</button>
+									{/if}
+									{#if currentModel?.capabilities.files}
+										<button
+											class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors
+												{isGuest ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
+											onclick={() => {
+												if (isGuest) return;
+												toolsOpen = false;
+												openFilePicker();
+											}}
+											disabled={isGuest}
+										>
 											{#if isGuest}
+												<LockIcon class="size-4 shrink-0 text-muted-foreground" />
+											{:else}
+												<PaperclipIcon class="size-4 shrink-0 {attachedFiles.length > 0 ? 'text-pink-600' : 'text-muted-foreground'}" />
+											{/if}
+											<div class="flex flex-1 flex-col">
+												<span class="text-sm font-semibold">Attach PDF</span>
+												<span class="text-xs text-muted-foreground">
+													{isGuest ? 'Sign in to attach files' : 'Add a document to the message'}
+												</span>
+											</div>
+											{#if !isGuest && attachedFiles.length > 0}
+												<span class="text-xs font-semibold text-pink-600">{attachedFiles.length}</span>
+											{/if}
+										</button>
+									{/if}
+									<button
+										class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors
+											{isGuest ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
+										onclick={() => {
+											if (isGuest) return;
+											chatStore.setWebSearchEnabled(!chatStore.webSearchEnabled);
+										}}
+										disabled={isGuest}
+									>
+										{#if isGuest}
+											<LockIcon class="size-4 shrink-0 text-muted-foreground" />
+										{:else}
+											<GlobeIcon class="size-4 shrink-0 {webSearchEnabled ? 'text-teal-600' : 'text-muted-foreground'}" />
+										{/if}
+										<div class="flex flex-1 flex-col">
+											<span class="text-sm font-semibold">Web search</span>
+											<span class="text-xs text-muted-foreground">
+												{isGuest ? 'Sign in to use web search' : 'Search the web for current info'}
+											</span>
+										</div>
+										{#if !isGuest}
+											<span
+												class="rounded-full px-2 py-0.5 text-xs font-semibold {webSearchEnabled
+													? 'bg-teal-500/15 text-teal-600'
+													: 'text-muted-foreground'}"
+											>
+												{webSearchEnabled ? 'On' : 'Off'}
+											</span>
+										{/if}
+									</button>
+								</div>
+							{:else}
+								<div class="space-y-0.5">
+									<div class="flex items-center gap-1 px-1 py-1">
+										<button
+											class="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+											onclick={() => (toolsView = 'main')}
+											aria-label="Back"
+										>
+											<ChevronLeftIcon class="size-4" />
+										</button>
+										<span class="flex-1 text-sm font-semibold">Reasoning effort</span>
+									</div>
+									{#each ['fast', 'low', 'medium', 'high'] as level (level)}
+										{@const locked = isGuest && level !== 'fast'}
+										{@const isCurrent = effort === level}
+										<button
+											class="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm transition-colors
+												{locked ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
+											onclick={() => {
+												if (locked) return;
+												if (level === 'fast' || level === 'low' || level === 'medium' || level === 'high') {
+													chatStore.setEffort(level);
+												}
+												toolsView = 'main';
+											}}
+											disabled={locked}
+										>
+											<span class="flex items-center gap-2">
+												<span class="flex size-4 items-center justify-center">
+													{#if isCurrent}
+														<CheckIcon class="size-4 text-primary" />
+													{/if}
+												</span>
+												<span class="font-semibold capitalize">{level}</span>
+											</span>
+											{#if locked}
 												<LockIcon class="size-3 text-muted-foreground" />
 											{/if}
-										</span>
-									</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem value="medium" disabled={isGuest}>
-										<span class="flex w-full items-center justify-between">
-											<span>Medium</span>
-											{#if isGuest}
-												<LockIcon class="size-3 text-muted-foreground" />
-											{/if}
-										</span>
-									</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem value="high" disabled={isGuest}>
-										<span class="flex w-full items-center justify-between">
-											<span>High</span>
-											{#if isGuest}
-												<LockIcon class="size-3 text-muted-foreground" />
-											{/if}
-										</span>
-									</DropdownMenu.RadioItem>
-								</DropdownMenu.RadioGroup>
-							</DropdownMenu.Content>
-						</DropdownMenu.Root>
-					{/if}
-					<!-- Vision is implicit: models that accept image input handle it
-					     automatically when an image is part of the message — no toggle needed. -->
-					{#if currentModel?.capabilities.files}
+										</button>
+									{/each}
+								</div>
+							{/if}
+						</Popover.Content>
+					</Popover.Root>
+
+					<!-- Desktop: inline capability toggles. Hidden at <sm: where the
+					     consolidated Tools popover above takes over. -->
+					<div class="hidden items-center gap-1.5 sm:flex">
+						{#if showEffortPicker}
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger>
+									{#snippet child({ props })}
+										<button
+											{...props}
+											class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+												{thinkingActive
+													? 'bg-violet-500/15 text-violet-600 ring-1 ring-violet-500/30'
+													: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+											title="Reasoning effort"
+										>
+											<BrainIcon class="size-4" />
+											<span class="capitalize">{effort}</span>
+											<ChevronDownIcon class="size-3" />
+										</button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content align="end" class="w-36">
+									<DropdownMenu.RadioGroup
+										value={effort}
+										onValueChange={(v) => {
+											if (isGuest) return;
+											if (v === 'fast' || v === 'low' || v === 'medium' || v === 'high') {
+												chatStore.setEffort(v);
+											}
+										}}
+									>
+										<DropdownMenu.RadioItem value="fast">Fast</DropdownMenu.RadioItem>
+										<DropdownMenu.RadioItem value="low" disabled={isGuest}>
+											<span class="flex w-full items-center justify-between">
+												<span>Low</span>
+												{#if isGuest}
+													<LockIcon class="size-3 text-muted-foreground" />
+												{/if}
+											</span>
+										</DropdownMenu.RadioItem>
+										<DropdownMenu.RadioItem value="medium" disabled={isGuest}>
+											<span class="flex w-full items-center justify-between">
+												<span>Medium</span>
+												{#if isGuest}
+													<LockIcon class="size-3 text-muted-foreground" />
+												{/if}
+											</span>
+										</DropdownMenu.RadioItem>
+										<DropdownMenu.RadioItem value="high" disabled={isGuest}>
+											<span class="flex w-full items-center justify-between">
+												<span>High</span>
+												{#if isGuest}
+													<LockIcon class="size-3 text-muted-foreground" />
+												{/if}
+											</span>
+										</DropdownMenu.RadioItem>
+									</DropdownMenu.RadioGroup>
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
+						{/if}
+						<!-- Vision is implicit: models that accept image input handle it
+						     automatically when an image is part of the message — no toggle needed. -->
+						{#if currentModel?.capabilities.files}
+							<button
+								class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+									{isGuest
+										? 'cursor-not-allowed text-muted-foreground/50'
+										: attachedFiles.length > 0
+											? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
+											: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+								onclick={isGuest ? undefined : openFilePicker}
+								disabled={isGuest}
+								title={isGuest ? 'Sign in to attach files' : 'Attach a PDF'}
+							>
+								{#if isGuest}
+									<LockIcon class="size-4" />
+								{:else}
+									<PaperclipIcon class="size-4" />
+								{/if}
+								<span>
+									Attach{!isGuest && attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
+								</span>
+							</button>
+						{/if}
+						<!-- Web Search is always available for signed-in users. Native-
+						     search models (Compound, Sonar) handle it themselves; for
+						     others, a custom search-tool wrapper will inject results
+						     into the request — wired in a follow-up. Guests see the
+						     button locked. -->
 						<button
-							class="capability-toggle flex items-center gap-1 rounded-full px-2 py-1.5 text-sm font-semibold transition-all sm:gap-1.5 sm:px-2.5
+							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
 								{isGuest
 									? 'cursor-not-allowed text-muted-foreground/50'
-									: attachedFiles.length > 0
-										? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
+									: webSearchEnabled
+										? 'bg-teal-500/15 text-teal-600 ring-1 ring-teal-500/30'
 										: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-							onclick={isGuest ? undefined : openFilePicker}
+							onclick={isGuest ? undefined : () => chatStore.setWebSearchEnabled(!chatStore.webSearchEnabled)}
 							disabled={isGuest}
-							title={isGuest ? 'Sign in to attach files' : 'Attach a PDF'}
+							title={isGuest ? 'Sign in to use web search' : 'Toggle web search'}
 						>
 							{#if isGuest}
 								<LockIcon class="size-4" />
 							{:else}
-								<PaperclipIcon class="size-4" />
+								<GlobeIcon class="size-4" />
 							{/if}
-							<span class="hidden sm:inline">
-								Attach{!isGuest && attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
-							</span>
-							{#if !isGuest && attachedFiles.length > 0}
-								<span class="sm:hidden">({attachedFiles.length})</span>
-							{/if}
+							<span>Search</span>
 						</button>
-					{/if}
-					<!-- Web Search is always available for signed-in users. Native-
-					     search models (Compound, Sonar) handle it themselves; for
-					     others, a custom search-tool wrapper will inject results
-					     into the request — wired in a follow-up. Guests see the
-					     button locked. -->
-					<button
-						class="capability-toggle flex items-center gap-1 rounded-full px-2 py-1.5 text-sm font-semibold transition-all sm:gap-1.5 sm:px-2.5
-							{isGuest
-								? 'cursor-not-allowed text-muted-foreground/50'
-								: webSearchEnabled
-									? 'bg-teal-500/15 text-teal-600 ring-1 ring-teal-500/30'
-									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-						onclick={isGuest ? undefined : () => chatStore.setWebSearchEnabled(!chatStore.webSearchEnabled)}
-						disabled={isGuest}
-						title={isGuest ? 'Sign in to use web search' : 'Toggle web search'}
-					>
-						{#if isGuest}
-							<LockIcon class="size-4" />
-						{:else}
-							<GlobeIcon class="size-4" />
-						{/if}
-						<span class="hidden sm:inline">Search</span>
-					</button>
+					</div>
 				</div>
 
 				<Button

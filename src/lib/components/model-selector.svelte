@@ -2,7 +2,6 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import ChevronUpIcon from '@lucide/svelte/icons/chevron-up';
 	import MinimizeIcon from '@lucide/svelte/icons/minimize-2';
 	import MaximizeIcon from '@lucide/svelte/icons/maximize-2';
 	import ChevronsUpIcon from '@lucide/svelte/icons/chevrons-up';
@@ -152,11 +151,9 @@
 				class="inline-flex flex-nowrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-all hover:bg-accent hover:shadow-sm active:scale-[0.98]"
 			>
 				<span class="max-w-32 truncate whitespace-nowrap text-sm font-semibold sm:max-w-none">{selected.modelName}</span>
-				{#if open}
-					<ChevronUpIcon class="size-4 shrink-0 text-muted-foreground" />
-				{:else}
-					<ChevronDownIcon class="size-4 shrink-0 text-muted-foreground" />
-				{/if}
+				<ChevronDownIcon
+					class="size-4 shrink-0 text-muted-foreground transition-transform duration-200 ease-out {open ? 'rotate-0' : 'rotate-180'}"
+				/>
 			</button>
 		{/snippet}
 	</Popover.Trigger>
