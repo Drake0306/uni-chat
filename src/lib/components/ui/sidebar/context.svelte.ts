@@ -22,11 +22,11 @@ export type SidebarStateProps = {
 
 class SidebarState {
 	readonly props: SidebarStateProps;
-	open = $derived.by(() => this.props.open());
+	get open() { return this.props.open(); }
 	openMobile = $state(false);
 	setOpen: SidebarStateProps["setOpen"];
 	#isMobile: IsMobile;
-	state = $derived.by(() => (this.open ? "expanded" : "collapsed"));
+	get state() { return this.open ? "expanded" : "collapsed"; }
 
 	constructor(props: SidebarStateProps) {
 		this.setOpen = props.setOpen;

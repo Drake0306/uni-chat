@@ -32,13 +32,12 @@
 	const isMac = browser && /Mac/i.test(navigator.userAgent);
 	let avatarLoadFailed = $state(false);
 
-	// Load chats once after auth resolves. Sign-in/out cleanup is handled
-	// explicitly in the dropdown handlers below — keeping it imperative avoids
-	// reactive feedback loops with the Supabase auth callback.
-	let chatsLoaded = false;
+	// Load chats once after auth resolves — module-level so it survives
+	// component remounts (mobile sidebar destroy/recreate cycle).
+	let _chatsLoaded = false;
 	$effect(() => {
-		if (!authStore.loading && !chatsLoaded) {
-			chatsLoaded = true;
+		if (!authStore.loading && !_chatsLoaded) {
+			_chatsLoaded = true;
 			chatStore.loadChats();
 		}
 	});
@@ -83,6 +82,15 @@
 	// (or escape / click-outside) just clears the state.
 	let chatPendingDelete = $state<Chat | null>(null);
 	let deleting = $state(false);
+	let openMenuChatId = $state<string | null>(null);
+
+	function handleMenuOpen(chatId: string, open: boolean) {
+		if (open) {
+			openMenuChatId = chatId;
+		} else if (openMenuChatId === chatId) {
+			openMenuChatId = null;
+		}
+	}
 
 	async function confirmDelete() {
 		if (!chatPendingDelete || deleting) return;
@@ -371,7 +379,7 @@
 		</Sidebar.SidebarMenuItem>
 	{:else}
 	{@const isActive = page.url.pathname === `/chat/${chat.id}`}
-	<ContextMenu.Root>
+	<ContextMenu.Root open={openMenuChatId === chat.id} onOpenChange={(v) => handleMenuOpen(chat.id, v)}>
 		<ContextMenu.Trigger>
 			{#snippet child({ props })}
 				<Sidebar.SidebarMenuItem {...props}>
@@ -395,7 +403,7 @@
 						showOnHover
 						onclick={() => handlePin(chat)}
 						aria-label={chat.pinned ? 'Unpin chat' : 'Pin chat'}
-						class="top-1 right-1.5 size-7 -translate-x-1 rounded-lg bg-background text-muted-foreground shadow-sm ring-1 ring-sidebar-border transition-all duration-150 ease-out hover:bg-sidebar-accent hover:text-foreground group-hover/menu-item:translate-x-0"
+						class="top-1 right-1.5 size-7 -translate-x-1 rounded-lg bg-background text-muted-foreground shadow-sm ring-1 ring-sidebar-border transition-all duration-150 ease-out hover:bg-sidebar-accent hover:text-foreground group-hover/menu-item:translate-x-0 max-md:hidden"
 					>
 						{#if chat.pinned}
 							<PinOffIcon class="size-4" />
