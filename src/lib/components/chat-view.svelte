@@ -34,6 +34,15 @@
 	import ThinkingBlock from '$lib/components/thinking-block.svelte';
 	import MarkdownRenderer from '$lib/components/markdown-renderer.svelte';
 	import { getDefaultModel, findModel } from '$lib/config/models.js';
+	import {
+		extractFile,
+		isSupportedFile,
+		attachmentsToMarkdown,
+		looksLikeScannedPdf,
+		ATTACHMENT_ACCEPT,
+		MAX_TOTAL_BYTES,
+		type ExtractedFile,
+	} from '$lib/file-extract.js';
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
@@ -218,13 +227,34 @@
 	function handleFileSelect(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
 		const picked = Array.from(input.files ?? []);
-		attachedFiles = [...attachedFiles, ...picked];
+		// Filter to supported types up-front so the chip area never shows
+		// something we can't actually send. Anything skipped surfaces as a
+		// brief warning in attachmentError.
+		const accepted: File[] = [];
+		const rejected: string[] = [];
+		for (const f of picked) {
+			if (isSupportedFile(f)) accepted.push(f);
+			else rejected.push(f.name);
+		}
+		attachedFiles = [...attachedFiles, ...accepted];
+		attachmentError = rejected.length
+			? `Skipped unsupported file${rejected.length === 1 ? '' : 's'}: ${rejected.join(', ')}`
+			: '';
 		input.value = '';
 	}
 
 	function removeAttachedFile(index: number) {
 		attachedFiles = attachedFiles.filter((_, i) => i !== index);
+		attachmentError = '';
 	}
+
+	// Surfaces extraction problems (oversize file, PDF parse error,
+	// unsupported MIME) under the composer. Cleared on next send / pick.
+	let attachmentError = $state('');
+	// True while PDF.js / File.text() are running. Drives the small
+	// "Reading file(s)…" indicator above the textarea so the user knows
+	// why the send button is disabled.
+	let isExtracting = $state(false);
 
 	// ── Suggestion prompts ──────────────────────────────
 	const suggestions = {
@@ -291,6 +321,89 @@
 		const text = (directText ?? input).trim();
 		if (!text || loading) return;
 
+		// Lock the send button up front — both file extraction and the
+		// chat-row insert below are async, and we don't want a double-send
+		// re-entry during either.
+		loading = true;
+		// Clear any stale warning from a prior send. Scoping the clear to
+		// "files attached" used to leak the previous send's scanned-PDF /
+		// skipped-file message into the next message bubble even when the
+		// user wasn't attaching anything new.
+		attachmentError = '';
+
+		// Extract attached files BEFORE creating the chat row so a parse
+		// error doesn't leave an empty chat hanging around. PDFs go through
+		// PDF.js (lazy-loaded), text/code files through File.text(). The
+		// extracted text is appended to the user's message as fenced code
+		// blocks — universal across every provider, no per-provider native
+		// PDF/vision plumbing needed for the common case.
+		let extractedAttachments: ExtractedFile[] = [];
+		if (attachedFiles.length > 0) {
+			// Total-size guard so a user can't pin 250 MB across many files
+			// into a single LLM call. Per-file MAX_FILE_BYTES is enforced
+			// inside extractFile too — this catches the cumulative case.
+			const totalBytes = attachedFiles.reduce((s, f) => s + f.size, 0);
+			if (totalBytes > MAX_TOTAL_BYTES) {
+				const mb = (totalBytes / 1024 / 1024).toFixed(1);
+				const limit = (MAX_TOTAL_BYTES / 1024 / 1024).toFixed(0);
+				attachmentError = `Attachments total ${mb} MB; combined limit is ${limit} MB.`;
+				loading = false;
+				return;
+			}
+
+			isExtracting = true;
+			// allSettled (not all): if one PDF is corrupt or an unrecognized
+			// file slips past the picker filter, salvage the rest instead
+			// of dumping the whole batch. Failures surface as a one-line
+			// warning while the successes go through. try/finally so an
+			// unexpected synchronous throw in extractFile (shouldn't happen,
+			// but defensive) still releases the pill.
+			let results: PromiseSettledResult<ExtractedFile>[];
+			try {
+				results = await Promise.allSettled(attachedFiles.map(extractFile));
+			} finally {
+				isExtracting = false;
+			}
+			const failed: string[] = [];
+			for (let i = 0; i < results.length; i++) {
+				const r = results[i];
+				if (r.status === 'fulfilled') {
+					extractedAttachments.push(r.value);
+				} else {
+					const reason = r.reason instanceof Error ? r.reason.message : 'Failed to read file';
+					failed.push(`${attachedFiles[i].name}: ${reason}`);
+				}
+			}
+			if (failed.length > 0 && extractedAttachments.length === 0) {
+				attachmentError = failed.join(' · ');
+				loading = false;
+				return;
+			}
+			// PDF.js extracts very little from scanned / image-only PDFs.
+			// Surface a soft heads-up so the user knows why the model's
+			// answer might be vague — not a hard block.
+			const scanned = extractedAttachments.filter(looksLikeScannedPdf);
+			const warnings: string[] = [];
+			if (failed.length > 0) warnings.push(`Skipped: ${failed.join(', ')}`);
+			if (scanned.length > 0) {
+				warnings.push(
+					`${scanned.map((f) => f.name).join(', ')} looked like scanned PDF${scanned.length === 1 ? '' : 's'} — extracted text may be sparse.`
+				);
+			}
+			attachmentError = warnings.join(' · ');
+		}
+		// Persisted attachment shape — drops the `language` hint (re-derivable
+		// from the filename via attachmentsToMarkdown when replaying), and is
+		// what the LLM payload + chip UI will read from now on. Text/PDF
+		// content lives here, NOT in message.content, so the user's bubble
+		// stays clean while the model still gets the full context.
+		const persistedAttachments = extractedAttachments.map((a) => ({
+			name: a.name,
+			mimeType: a.mimeType,
+			pageCount: a.pageCount,
+			text: a.text,
+		}));
+
 		// Temp mode: skip every persistence step. Messages live only in
 		// chatStore.messages (in-memory), no chat row created, no sidebar
 		// entry, no DB write, no localStorage. Refresh clears everything.
@@ -314,13 +427,20 @@
 			id: crypto.randomUUID(),
 			role: 'user',
 			content: text,
+			...(persistedAttachments.length ? { attachments: persistedAttachments } : {}),
 		};
 		chatStore.pushMessage(userMsg);
 		input = '';
-		// Clear staged file chips. Actual file transmission isn't wired yet —
-		// follow-up task is per-provider PDF/image content-block encoding.
+		// Attachments are stored on userMsg.attachments above and folded
+		// back into the request body at fetch time (see the messages.map
+		// inside the /api/chat fetch below). Clear the staging area so the
+		// chips disappear and the next message starts fresh. We deliberately
+		// KEEP attachmentError set here — soft warnings
+		// (scanned PDF, partial extraction failures) need to remain visible
+		// after the send so the user can read them. They get cleared at the
+		// start of the next handleSend (when extraction begins) or when the
+		// user picks/removes a file.
 		attachedFiles = [];
-		loading = true;
 
 		chatStore.pushMessage({
 			id: crypto.randomUUID(),
@@ -359,7 +479,16 @@
 					modelId: selectedModel.modelId,
 					messages: messages
 						.filter((m) => m.id !== assistantMsg.id && !m.isError)
-						.map((m) => ({ role: m.role, content: m.content })),
+						.map((m) => ({
+							role: m.role,
+							// Attachments are stored separately on the Message so
+							// the bubble can render clean; fold them back into a
+							// single content string for the LLM here. This keeps
+							// every provider on the existing string-content shape.
+							content: m.attachments?.length
+								? `${m.content}\n\n${attachmentsToMarkdown(m.attachments)}`
+								: m.content,
+						})),
 					...(showEffortPicker && thinkingActive && { thinking: true, effort }),
 					...(webSearchEnabled && { webSearch: true }),
 					// In temp mode we omit chatId/messageId so the server-side
@@ -683,6 +812,26 @@
 							<div class="max-w-[85%] rounded-2xl bg-muted/60 px-4 py-2.5">
 								<p class="whitespace-pre-wrap text-base">{message.content}</p>
 							</div>
+							<!-- Attachments rendered as compact chips BELOW the bubble.
+							     The full extracted text only goes to the LLM (combined
+							     into `content` at request time), so the user sees a
+							     clean message + filenames here, not 50 KB of fenced PDF
+							     text in their own bubble. -->
+							{#if message.attachments?.length}
+								<div class="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+									{#each message.attachments as a, i (`${i}:${a.name}`)}
+										<div
+											class="flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
+										>
+											<PaperclipIcon class="size-3 shrink-0" />
+											<span class="max-w-48 truncate text-foreground">{a.name}</span>
+											{#if a.pageCount}
+												<span class="shrink-0">·&nbsp;{a.pageCount}p</span>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{/if}
 							<div class="mt-2 flex items-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
 								<button
 									class="msg-action flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
@@ -768,18 +917,25 @@
 	<!-- Composer -->
 	<div class="px-3 pb-4 sm:px-6 sm:pb-6">
 		<div class="mx-auto max-w-3xl rounded-2xl p-2 sm:p-3" style="background-color: var(--composer-bg);">
-			<!-- Hidden file picker. Triggered by the "Attach" button below. -->
+			<!-- Hidden file picker. Triggered by the "Attach" button below.
+			     Accepts PDFs plus a wide allowlist of text/code/data extensions —
+			     all extracted client-side via file-extract.ts and embedded as
+			     markdown into the user's message. The accept string is built
+			     from the same allowlist (TEXT_EXTENSIONS in file-extract.ts) so
+			     the picker filter and the runtime check stay in sync. -->
 			<input
 				type="file"
-				accept="application/pdf"
+				accept={ATTACHMENT_ACCEPT}
 				multiple
 				class="hidden"
 				bind:this={fileInputEl}
 				onchange={handleFileSelect}
 			/>
 
-			<!-- Staged file attachments. Visual only for now — files are not yet
-			     transmitted to the provider; that's a follow-up task. -->
+			<!-- Staged file attachments. Files are extracted to text in
+			     handleSend (PDFs via PDF.js, code/text via File.text()) and
+			     appended to the user's message before it goes to the LLM.
+			     Universal across providers — no per-provider plumbing needed. -->
 			{#if attachedFiles.length > 0}
 				<div class="mb-2 flex flex-wrap gap-1.5 px-1">
 					{#each attachedFiles as f, i (i + ':' + f.name)}
@@ -787,14 +943,33 @@
 							<PaperclipIcon class="size-3 text-muted-foreground" />
 							<span class="max-w-40 truncate">{f.name}</span>
 							<button
-								class="text-muted-foreground hover:text-foreground"
+								class="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 								onclick={() => removeAttachedFile(i)}
-								aria-label="Remove file"
+								disabled={isExtracting || loading}
+								aria-label={`Remove ${f.name}`}
 							>
 								×
 							</button>
 						</div>
 					{/each}
+				</div>
+			{/if}
+			{#if isExtracting}
+				<div
+					class="mb-2 inline-flex items-center gap-2 rounded-md bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary"
+					role="status"
+					aria-live="polite"
+				>
+					<span class="streaming-spinner" aria-hidden="true"></span>
+					Reading file{attachedFiles.length === 1 ? '' : 's'}…
+				</div>
+			{:else if attachmentError}
+				<div
+					class="mb-2 rounded-md bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+					role="alert"
+					aria-live="assertive"
+				>
+					{attachmentError}
 				</div>
 			{/if}
 
@@ -860,33 +1035,37 @@
 											<span class="text-xs font-semibold capitalize text-muted-foreground">{effort}</span>
 										</button>
 									{/if}
-									{#if currentModel?.capabilities.files}
-										<button
-											class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors
-												{isGuest ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
-											onclick={() => {
-												if (isGuest) return;
-												toolsOpen = false;
-												openFilePicker();
-											}}
-											disabled={isGuest}
-										>
-											{#if isGuest}
-												<LockIcon class="size-4 shrink-0 text-muted-foreground" />
-											{:else}
-												<PaperclipIcon class="size-4 shrink-0 {attachedFiles.length > 0 ? 'text-pink-600' : 'text-muted-foreground'}" />
-											{/if}
-											<div class="flex flex-1 flex-col">
-												<span class="text-sm font-semibold">Attach PDF</span>
-												<span class="text-xs text-muted-foreground">
-													{isGuest ? 'Sign in to attach files' : 'Add a document to the message'}
-												</span>
-											</div>
-											{#if !isGuest && attachedFiles.length > 0}
-												<span class="text-xs font-semibold text-pink-600">{attachedFiles.length}</span>
-											{/if}
-										</button>
-									{/if}
+									<!-- Attach is now universal: PDFs and text/code files extract
+									     to plain text client-side and embed into the message at
+									     send time, so every model can ingest them. The old
+									     capabilities.files gate is gone. Image attachments
+									     (V2) will re-introduce a vision-capability gate when
+									     they land. -->
+									<button
+										class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors
+											{isGuest ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
+										onclick={() => {
+											if (isGuest) return;
+											toolsOpen = false;
+											openFilePicker();
+										}}
+										disabled={isGuest}
+									>
+										{#if isGuest}
+											<LockIcon class="size-4 shrink-0 text-muted-foreground" />
+										{:else}
+											<PaperclipIcon class="size-4 shrink-0 {attachedFiles.length > 0 ? 'text-pink-600' : 'text-muted-foreground'}" />
+										{/if}
+										<div class="flex flex-1 flex-col">
+											<span class="text-sm font-semibold">Attach file</span>
+											<span class="text-xs text-muted-foreground">
+												{isGuest ? 'Sign in to attach files' : 'PDF or text / code'}
+											</span>
+										</div>
+										{#if !isGuest && attachedFiles.length > 0}
+											<span class="text-xs font-semibold text-pink-600">{attachedFiles.length}</span>
+										{/if}
+									</button>
 									<button
 										class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors
 											{isGuest ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
@@ -1023,30 +1202,37 @@
 								</DropdownMenu.Content>
 							</DropdownMenu.Root>
 						{/if}
-						<!-- Vision is implicit: models that accept image input handle it
-						     automatically when an image is part of the message — no toggle needed. -->
-						{#if currentModel?.capabilities.files}
-							<button
-								class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
-									{isGuest
-										? 'cursor-not-allowed text-muted-foreground/50'
-										: attachedFiles.length > 0
-											? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
-											: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-								onclick={isGuest ? undefined : openFilePicker}
-								disabled={isGuest}
-								title={isGuest ? 'Sign in to attach files' : 'Attach a PDF'}
-							>
-								{#if isGuest}
-									<LockIcon class="size-4" />
-								{:else}
-									<PaperclipIcon class="size-4" />
-								{/if}
-								<span>
-									Attach{!isGuest && attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
-								</span>
-							</button>
-						{/if}
+						<!-- Attach a PDF or text / code file. Universal across every
+						     model — the file is extracted to plain text client-side
+						     and folded into the message payload at send time, so the
+						     old capabilities.files gate is intentionally absent. The
+						     vision flag will gate IMAGE attachments when those land
+						     (V2). -->
+						<button
+							class="capability-toggle flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-semibold transition-all
+								{isGuest
+									? 'cursor-not-allowed text-muted-foreground/50'
+									: attachedFiles.length > 0
+										? 'bg-pink-500/15 text-pink-600 ring-1 ring-pink-500/30'
+										: 'text-muted-foreground hover:bg-muted hover:text-foreground'}
+								disabled:cursor-not-allowed disabled:opacity-60"
+							onclick={isGuest ? undefined : openFilePicker}
+							disabled={isGuest || isExtracting}
+							title={isGuest
+								? 'Sign in to attach files'
+								: isExtracting
+									? 'Reading attached files…'
+									: 'Attach PDF or text / code'}
+						>
+							{#if isGuest}
+								<LockIcon class="size-4" />
+							{:else}
+								<PaperclipIcon class="size-4" />
+							{/if}
+							<span>
+								Attach{!isGuest && attachedFiles.length > 0 ? ` (${attachedFiles.length})` : ''}
+							</span>
+						</button>
 						<!-- Web Search is always available for signed-in users. Native-
 						     search models (Compound, Sonar) handle it themselves; for
 						     others, a custom search-tool wrapper will inject results

@@ -97,8 +97,9 @@
 			title: 'Think, search, attach',
 			body:
 				'Three toggles in this row: deeper reasoning (slower but smarter), live web search ' +
-				'(for current info), and PDF attachments (drop a doc to discuss it). Each toggle ' +
-				'tints when on so you always know what\'s active.',
+				'(for current info), and file attachments — drop a PDF or any text / code file ' +
+				"and we'll feed its contents to the model. Each toggle tints when on so you " +
+				"always know what's active.",
 		},
 		{
 			id: 'search',
@@ -199,7 +200,7 @@
 			target: '[data-onboarding="tools-mobile"]',
 			title: 'Tools',
 			body:
-				'Reasoning depth, web search, and PDF attachments live behind this Tools button ' +
+				'Reasoning depth, web search, and file attachments (PDFs or text / code) live behind this Tools button ' +
 				'on mobile. Tap "Show me" to open it.',
 			demo: {
 				kind: 'open-and-close',

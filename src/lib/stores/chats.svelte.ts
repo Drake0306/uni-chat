@@ -1,5 +1,6 @@
 import { supabase } from '$lib/supabase.js';
 import { authStore } from '$lib/stores/auth.svelte.js';
+import { parseLegacyAttachments } from '$lib/file-extract.js';
 import type { Chat, Message } from '$lib/types.js';
 
 const STORAGE_KEY = 'unichat_chats';
@@ -83,7 +84,24 @@ function loadFromLocalStorage(): (Chat & { messages: Message[] })[] {
 	if (typeof window === 'undefined') return [];
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
-		return raw ? JSON.parse(raw) : [];
+		const parsed: (Chat & { messages: Message[] })[] = raw ? JSON.parse(raw) : [];
+		// Apply the same legacy-content split here that mapMessageRow does
+		// for Supabase reads. Guest chats saved before the attachments split
+		// have typed-text + fenced "📎 **" blocks inside message.content;
+		// without this they'd render as the giant raw dump instead of chips.
+		for (const chat of parsed) {
+			if (!chat.messages) continue;
+			for (const m of chat.messages) {
+				if (!m.attachments && m.content && m.content.includes('📎 **')) {
+					const split = parseLegacyAttachments(m.content);
+					if (split) {
+						m.content = split.content;
+						m.attachments = split.attachments;
+					}
+				}
+			}
+		}
+		return parsed;
 	} catch {
 		return [];
 	}
@@ -123,13 +141,37 @@ function mapChatRow(row: Record<string, unknown>): Chat {
 }
 
 function mapMessageRow(row: Record<string, unknown>): Message {
+	// `attachments` is JSONB on the messages table — Supabase already
+	// parses it. Defensive null/undefined guard so older rows (pre-migration)
+	// stay readable.
+	const rawAttachments = row.attachments;
+	let attachments = Array.isArray(rawAttachments)
+		? (rawAttachments as Message['attachments'])
+		: undefined;
+	let content = row.content as string;
+
+	// Legacy format split: rows saved BEFORE the attachments column existed
+	// stored typed text + fenced "📎 **filename**" blocks all inside
+	// `content`. Detect that shape and pull the blocks back out so the
+	// bubble shows clean text + chips instead of dumping 50 KB of fenced
+	// markdown into the message body. Pure in-memory transform — we don't
+	// rewrite the DB row.
+	if (!attachments && content && content.includes('📎 **')) {
+		const parsed = parseLegacyAttachments(content);
+		if (parsed) {
+			content = parsed.content;
+			attachments = parsed.attachments;
+		}
+	}
+
 	return {
 		id: row.id as string,
 		role: row.role as 'user' | 'assistant',
-		content: row.content as string,
+		content,
 		reasoning: row.reasoning as string | undefined,
 		modelName: row.model_name as string | undefined,
 		isError: row.is_error as boolean,
+		attachments,
 	};
 }
 
@@ -531,6 +573,9 @@ export const chatStore = {
 					reasoning: message.reasoning,
 					model_name: message.modelName,
 					is_error: message.isError ?? false,
+					// JSONB column. Send null when no files are attached so
+					// old rows / non-attachment messages stay clean in the DB.
+					attachments: message.attachments?.length ? message.attachments : null,
 				});
 				return;
 			} catch (err) {
@@ -672,6 +717,7 @@ export const chatStore = {
 					reasoning: m.reasoning ?? null,
 					model_name: m.modelName ?? null,
 					is_error: m.isError ?? false,
+					attachments: m.attachments?.length ? m.attachments : null,
 				}));
 
 			if (validMessages.length > 0) {
