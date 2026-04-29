@@ -16,10 +16,13 @@
 	let { children } = $props();
 
 	// Settings is a full-viewport route — opt out of the app sidebar so the
-	// page can render its own left rail without competing chrome. /login is
-	// also full-viewport so the sign-in card has the screen to itself.
+	// page can render its own left rail without competing chrome. /login,
+	// /privacy-policy, and /terms-of-service are also full-viewport.
 	const fullViewport = $derived(
-		page.url.pathname.startsWith('/settings') || page.url.pathname.startsWith('/login')
+		page.url.pathname.startsWith('/settings') ||
+			page.url.pathname.startsWith('/login') ||
+			page.url.pathname.startsWith('/privacy-policy') ||
+			page.url.pathname.startsWith('/terms-of-service')
 	);
 
 	// Hydrate the per-user model selections whenever auth state stabilizes.

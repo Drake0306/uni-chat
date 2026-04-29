@@ -10,6 +10,8 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
+	import ShieldIcon from '@lucide/svelte/icons/shield';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
@@ -539,6 +541,40 @@
 	</div>
 {:else if activeTab === 'models'}
 	<SettingsModelsTab />
+{:else if activeTab === 'contact'}
+	<div class="space-y-8">
+		<h2 class="text-2xl font-bold">We're here to help!</h2>
+
+		<div class="space-y-4">
+			<!-- Privacy Policy -->
+			<a
+				href="/privacy-policy"
+				class="flex items-start gap-4 rounded-xl border border-primary/15 bg-primary/5 px-5 py-4 transition-colors hover:bg-primary/10"
+			>
+				<ShieldIcon class="mt-0.5 size-5 shrink-0 text-primary" />
+				<div class="min-w-0">
+					<p class="font-semibold">Privacy Policy</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Read our privacy policy and data handling practices
+					</p>
+				</div>
+			</a>
+
+			<!-- Terms of Service -->
+			<a
+				href="/terms-of-service"
+				class="flex items-start gap-4 rounded-xl border border-primary/15 bg-primary/5 px-5 py-4 transition-colors hover:bg-primary/10"
+			>
+				<ScrollTextIcon class="mt-0.5 size-5 shrink-0 text-primary" />
+				<div class="min-w-0">
+					<p class="font-semibold">Terms of Service</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Review our terms of service and usage guidelines
+					</p>
+				</div>
+			</a>
+		</div>
+	</div>
 {:else}
 	<!-- Other tabs intentionally empty; content specs are pending. -->
 	<div class="rounded-xl border border-dashed bg-card/50 px-6 py-16 text-center text-sm text-muted-foreground">
