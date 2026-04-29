@@ -9,6 +9,7 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import { authStore } from '$lib/stores/auth.svelte.js';
+	import { customizationStore } from '$lib/stores/customization.svelte.js';
 	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
 
 	let { children } = $props();
@@ -123,9 +124,22 @@
 			<div class="grid gap-8 md:grid-cols-[280px_1fr]">
 				<!-- ─────── Left rail ─────── -->
 				<aside class="space-y-4 md:sticky md:top-8 md:self-start">
-					<!-- Profile card -->
+					<!-- Profile card. When the user has Hide Personal Info on, we
+					     swap the avatar for a generic placeholder and hide name +
+					     email. Tier label remains so the user still sees their
+					     plan. -->
 					<div class="rounded-xl border bg-card p-6 text-center">
-						{#if authStore.avatarUrl && !avatarLoadFailed}
+						{#if customizationStore.hidePersonalInfo}
+							<div
+								class="mx-auto flex size-24 items-center justify-center rounded-full bg-primary text-3xl font-semibold text-primary-foreground"
+							>
+								?
+							</div>
+							<h2 class="mt-4 text-xl font-bold">Account</h2>
+							<p class="mt-1 truncate text-sm text-muted-foreground">
+								Personal info hidden
+							</p>
+						{:else if authStore.avatarUrl && !avatarLoadFailed}
 							<img
 								src={authStore.avatarUrl}
 								alt=""
@@ -133,17 +147,21 @@
 								referrerpolicy="no-referrer"
 								onerror={() => (avatarLoadFailed = true)}
 							/>
+							<h2 class="mt-4 text-xl font-bold">{authStore.displayName}</h2>
+							<p class="mt-1 truncate text-sm text-muted-foreground">
+								{authStore.user?.email ?? ''}
+							</p>
 						{:else}
 							<div
 								class="mx-auto flex size-24 items-center justify-center rounded-full bg-primary text-3xl font-semibold text-primary-foreground"
 							>
 								{initials}
 							</div>
+							<h2 class="mt-4 text-xl font-bold">{authStore.displayName}</h2>
+							<p class="mt-1 truncate text-sm text-muted-foreground">
+								{authStore.user?.email ?? ''}
+							</p>
 						{/if}
-						<h2 class="mt-4 text-xl font-bold">{authStore.displayName}</h2>
-						<p class="mt-1 truncate text-sm text-muted-foreground">
-							{authStore.user?.email ?? ''}
-						</p>
 						<p class="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 							{tierLabel}
 						</p>

@@ -51,6 +51,10 @@
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
+	import {
+		customizationStore,
+		buildPersonalizationPrompt,
+	} from '$lib/stores/customization.svelte.js';
 	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
 	import type { Message, TextAttachment, ImageAttachment, LLMContentBlock } from '$lib/types.js';
 	import { ThinkTagStripper } from '$lib/think-tag-stripper.js';
@@ -525,9 +529,11 @@
 	async function buildMessagesPayload(
 		all: Message[],
 		excludeId: string
-	): Promise<Array<{ role: 'user' | 'assistant'; content: string | LLMContentBlock[] }>> {
+	): Promise<
+		Array<{ role: 'system' | 'user' | 'assistant'; content: string | LLMContentBlock[] }>
+	> {
 		const filtered = all.filter((m) => m.id !== excludeId && !m.isError);
-		return Promise.all(
+		const turns = await Promise.all(
 			filtered.map(async (m) => {
 				const textParts = m.attachments?.filter(
 					(a): a is TextAttachment => a.kind === 'text'
@@ -554,6 +560,20 @@
 				return { role: m.role, content: blocks };
 			})
 		);
+
+		// Personalization: prepend a synthesized system message built from the
+		// user's settings → Customization tab. Authenticated-only (guests get
+		// nothing). buildPersonalizationPrompt returns null when every field
+		// is empty so we don't waste tokens on an empty preamble. Tier caps
+		// are applied inside the builder (free 500 chars / 5 traits, pro
+		// 1500 / 15, max 3000 / 50).
+		if (authStore.isAuthenticated) {
+			const sys = buildPersonalizationPrompt(customizationStore.value, authStore.tier);
+			if (sys) {
+				return [{ role: 'system' as const, content: sys }, ...turns];
+			}
+		}
+		return turns;
 	}
 
 	async function handleSend(directText?: string) {
@@ -772,6 +792,11 @@
 		}
 
 		chatStore.setStreaming(true);
+		// Stats-for-Nerds timing markers. Captured regardless of whether the
+		// toggle is on (cheap) so toggling on after a message arrived still
+		// shows the numbers; rendering is gated on the toggle in the bubble.
+		const streamStartedAt = performance.now();
+		let firstChunkAt: number | null = null;
 		try {
 			const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 			const token = authStore.getAccessToken();
@@ -841,11 +866,13 @@
 						const reasoningChunk: unknown =
 							delta?.reasoning_content ?? delta?.reasoning;
 						if (typeof reasoningChunk === 'string' && reasoningChunk.length > 0) {
+							if (firstChunkAt === null) firstChunkAt = performance.now();
 							assistantMsg.reasoning =
 								(assistantMsg.reasoning ?? '') + reasoningChunk;
 							assistantMsg.isThinking = true;
 						}
 						if (typeof delta?.content === 'string' && delta.content.length > 0) {
+							if (firstChunkAt === null) firstChunkAt = performance.now();
 							const split = thinkStripper.process(delta.content);
 							if (split.reasoning) {
 								assistantMsg.reasoning =
@@ -873,6 +900,19 @@
 			if (!assistantMsg.content) {
 				assistantMsg.content = 'No response generated. Check your API keys.';
 				assistantMsg.isError = true;
+			}
+
+			// Stats for Nerds: only attach stats if at least one chunk arrived.
+			// Errored streams (no content, isError set) skip stats entirely.
+			if (firstChunkAt !== null && !assistantMsg.isError) {
+				const endAt = performance.now();
+				const totalChars =
+					(assistantMsg.content?.length ?? 0) + (assistantMsg.reasoning?.length ?? 0);
+				assistantMsg.streamStats = {
+					ttftMs: Math.max(0, Math.round(firstChunkAt - streamStartedAt)),
+					totalMs: Math.max(0, Math.round(endAt - streamStartedAt)),
+					approxTokens: Math.round(totalChars / 4),
+				};
 			}
 		} catch (err) {
 			assistantMsg.isThinking = false;
@@ -1280,7 +1320,7 @@
 								</div>
 							{/if}
 							{#if message.content}
-								<div class="mt-4 flex items-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+								<div class="mt-4 flex flex-wrap items-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
 									<button
 										class="msg-action flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
 										onclick={() => copyMessage(message)}
@@ -1295,6 +1335,22 @@
 									</button>
 									{#if message.modelName}
 										<span class="flex items-center rounded-full bg-muted/60 px-2.5 py-1 text-sm font-medium text-muted-foreground">{message.modelName}</span>
+									{/if}
+									{#if customizationStore.statsForNerds && message.streamStats && !isStreamingMsg}
+										{@const s = message.streamStats}
+										{@const genMs = Math.max(0, s.totalMs - s.ttftMs)}
+										{@const tps = genMs > 0 ? Math.round((s.approxTokens / genMs) * 1000) : 0}
+										<span
+											class="flex items-center gap-1.5 rounded-full bg-muted/60 px-2.5 py-1 font-mono text-xs text-muted-foreground"
+											title="Approx tokens · tokens/s · time to first token · total time"
+										>
+											~{s.approxTokens} toks
+											{#if tps > 0}
+												<span aria-hidden="true">·</span>{tps} tok/s
+											{/if}
+											<span aria-hidden="true">·</span>TTFT {s.ttftMs}ms
+											<span aria-hidden="true">·</span>{(s.totalMs / 1000).toFixed(2)}s
+										</span>
 									{/if}
 								</div>
 							{/if}

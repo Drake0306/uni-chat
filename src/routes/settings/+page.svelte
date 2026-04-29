@@ -6,10 +6,8 @@
 	import WrenchIcon from '@lucide/svelte/icons/wrench';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import LayersIcon from '@lucide/svelte/icons/layers';
-	import InfoIcon from '@lucide/svelte/icons/info';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
+	import XIcon from '@lucide/svelte/icons/x';
 	import ShieldIcon from '@lucide/svelte/icons/shield';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -19,6 +17,12 @@
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { colorsStore } from '$lib/stores/colors.svelte.js';
 	import { codeBlockSettings } from '$lib/stores/code-block-settings.svelte.js';
+	import {
+		customizationStore,
+		getTierCaps,
+		MAX_NAME_LEN,
+		MAX_OCCUPATION_LEN,
+	} from '$lib/stores/customization.svelte.js';
 
 	// ── Active tab — read from URL query (?tab=...) ─────────
 	type TabId =
@@ -49,11 +53,20 @@
 	// ── Visual-only state for the Account tab ───────────────
 	let emailReceipts = $state(false);
 
-	// ── Visual-only state for the Customization tab ─────────
+	// ── Customization draft state ───────────────────────────
+	// Hydrated from customizationStore via the $effect below. Save Preferences
+	// writes the draft back to the store, which persists to localStorage and
+	// (when authenticated) Supabase.
 	let custName = $state('');
 	let custOccupation = $state('');
+	let traits = $state<string[]>([]);
 	let traitInput = $state('');
 	let aboutYou = $state('');
+	let hidePersonalInfo = $state(false);
+	let statsForNerds = $state(false);
+	let saveStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
+	let saveResetTimer: ReturnType<typeof setTimeout> | null = null;
+
 	const suggestedTraits = [
 		'friendly',
 		'witty',
@@ -64,14 +77,89 @@
 		'patient',
 	];
 
-	let disableExternalLinkWarning = $state(false);
-	let invertSendNewLine = $state(false);
+	// Hydrate the draft from the store. Re-runs whenever the store mutates
+	// (initial mount and again when the auth profile fetch resolves on a
+	// fresh load). Untracked write to saveStatus to clear stale "saved" /
+	// "error" badges if external state changes.
+	$effect(() => {
+		const v = customizationStore.value;
+		custName = v.name;
+		custOccupation = v.occupation;
+		traits = [...v.traits];
+		aboutYou = v.about;
+		hidePersonalInfo = v.hidePersonalInfo;
+		statsForNerds = v.statsForNerds;
+	});
 
-	let boringTheme = $state(false);
-	let hidePersonalInfo = $state(false);
-	let disableThematicBreaks = $state(false);
-	let statsForNerds = $state(false);
-	let minimalistCommandMenu = $state(false);
+	const isDirty = $derived(
+		custName !== customizationStore.name ||
+			custOccupation !== customizationStore.occupation ||
+			aboutYou !== customizationStore.about ||
+			hidePersonalInfo !== customizationStore.hidePersonalInfo ||
+			statsForNerds !== customizationStore.statsForNerds ||
+			traits.length !== customizationStore.traits.length ||
+			traits.some((t, i) => t !== customizationStore.traits[i])
+	);
+
+	// Tier-aware caps. authStore.tier is one of 'guest'|'free'|'pro'|'max';
+	// the settings page is auth-gated so 'guest' never lands here, but
+	// getTierCaps falls back to 'free' caps if anything unexpected slips in.
+	const tierCaps = $derived(getTierCaps(authStore.tier));
+	const traitsAtCap = $derived(traits.length >= tierCaps.traits);
+	const aboutAtCap = $derived(aboutYou.length >= tierCaps.about);
+	const showUpgradeHint = $derived(authStore.tier !== 'max');
+
+	function addTrait(value: string) {
+		const v = value.trim();
+		if (!v) return;
+		if (traits.includes(v)) {
+			traitInput = '';
+			return;
+		}
+		if (traits.length >= tierCaps.traits) return;
+		traits = [...traits, v.slice(0, 50)];
+		traitInput = '';
+	}
+
+	function removeTrait(value: string) {
+		traits = traits.filter((t) => t !== value);
+	}
+
+	function onTraitKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' || e.key === 'Tab') {
+			if (traitInput.trim().length === 0) return;
+			e.preventDefault();
+			addTrait(traitInput);
+		} else if (e.key === 'Backspace' && traitInput.length === 0 && traits.length > 0) {
+			// Quick affordance: backspace on empty input pops the last trait.
+			traits = traits.slice(0, -1);
+		}
+	}
+
+	async function savePreferences() {
+		if (saveResetTimer) {
+			clearTimeout(saveResetTimer);
+			saveResetTimer = null;
+		}
+		saveStatus = 'saving';
+		const ok = await customizationStore.save(
+			{
+				name: custName,
+				occupation: custOccupation,
+				traits,
+				about: aboutYou,
+				hidePersonalInfo,
+				statsForNerds,
+			},
+			authStore.user?.id ?? null
+		);
+		saveStatus = ok ? 'saved' : 'error';
+		if (ok) {
+			saveResetTimer = setTimeout(() => {
+				if (saveStatus === 'saved') saveStatus = 'idle';
+			}, 2000);
+		}
+	}
 
 	// ── Tier flags for plan card "Current / Upgrade" buttons ─
 	const isFree = $derived(authStore.tier === 'free');
@@ -211,31 +299,6 @@
 			<h2 class="mb-6 text-2xl font-bold">Customize Uni Chat</h2>
 
 			<div class="space-y-6">
-				<!-- Profile -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-1.5">
-						<p class="text-sm font-semibold">Profile</p>
-						<InfoIcon class="size-3.5 text-muted-foreground" />
-					</div>
-					<div class="flex gap-2">
-						<button
-							type="button"
-							class="flex flex-1 items-center gap-2 rounded-lg border bg-background px-3.5 py-2.5 text-sm transition-colors hover:bg-accent/50"
-						>
-							<MessageCircleIcon class="size-4 text-muted-foreground" />
-							<span>Default</span>
-							<ChevronDownIcon class="ml-auto size-4 text-muted-foreground" />
-						</button>
-						<button
-							type="button"
-							class="flex size-10 items-center justify-center rounded-lg border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-							aria-label="Add profile"
-						>
-							<PlusIcon class="size-4" />
-						</button>
-					</div>
-				</div>
-
 				<!-- Name -->
 				<div class="space-y-2">
 					<label for="cust-name" class="text-sm font-semibold">
@@ -245,12 +308,12 @@
 						<input
 							id="cust-name"
 							bind:value={custName}
-							maxlength="50"
+							maxlength={MAX_NAME_LEN}
 							placeholder="Enter your name"
 							class="w-full rounded-lg border bg-background px-3.5 py-2.5 pr-16 text-sm outline-none transition-colors focus:ring-2 focus:ring-ring"
 						/>
 						<span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-							{custName.length}/50
+							{custName.length}/{MAX_NAME_LEN}
 						</span>
 					</div>
 				</div>
@@ -262,12 +325,12 @@
 						<input
 							id="cust-occ"
 							bind:value={custOccupation}
-							maxlength="100"
+							maxlength={MAX_OCCUPATION_LEN}
 							placeholder="Engineer, student, etc."
 							class="w-full rounded-lg border bg-background px-3.5 py-2.5 pr-16 text-sm outline-none transition-colors focus:ring-2 focus:ring-ring"
 						/>
 						<span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-							{custOccupation.length}/100
+							{custOccupation.length}/{MAX_OCCUPATION_LEN}
 						</span>
 					</div>
 				</div>
@@ -277,23 +340,52 @@
 					<label for="cust-traits" class="text-sm font-semibold">
 						What traits should Uni Chat have?
 					</label>
-					<div class="relative">
+					<div
+						class="flex flex-wrap items-center gap-1.5 rounded-lg border bg-background px-2 py-2 transition-colors focus-within:ring-2 focus-within:ring-ring"
+					>
+						{#each traits as trait (trait)}
+							<span
+								class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-foreground"
+							>
+								{trait}
+								<button
+									type="button"
+									class="text-muted-foreground transition-colors hover:text-foreground"
+									aria-label={`Remove ${trait}`}
+									onclick={() => removeTrait(trait)}
+								>
+									<XIcon class="size-3" />
+								</button>
+							</span>
+						{/each}
 						<input
 							id="cust-traits"
 							bind:value={traitInput}
-							maxlength="100"
-							placeholder="Type a trait and press Enter or Tab..."
-							class="w-full rounded-lg border bg-background px-3.5 py-2.5 pr-16 text-sm outline-none transition-colors focus:ring-2 focus:ring-ring"
+							onkeydown={onTraitKeydown}
+							maxlength="50"
+							disabled={traitsAtCap}
+							placeholder={traits.length === 0
+								? 'Type a trait and press Enter…'
+								: traitsAtCap
+									? `${tierCaps.traits} trait limit reached`
+									: 'Add another…'}
+							class="min-w-[8rem] flex-1 bg-transparent px-1.5 py-0.5 text-sm outline-none disabled:cursor-not-allowed"
 						/>
-						<span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-							{traitInput.length}/100
-						</span>
+					</div>
+					<div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+						<span>{traits.length}/{tierCaps.traits} traits</span>
+						{#if traitsAtCap && showUpgradeHint}
+							<span class="text-primary">Upgrade for more traits</span>
+						{/if}
 					</div>
 					<div class="flex flex-wrap gap-2 pt-1">
 						{#each suggestedTraits as trait (trait)}
+							{@const isSelected = traits.includes(trait)}
 							<button
 								type="button"
-								class="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-xs font-medium transition-colors hover:bg-accent"
+								disabled={isSelected || traitsAtCap}
+								onclick={() => addTrait(trait)}
+								class="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
 							>
 								{trait}
 								<PlusIcon class="size-3" />
@@ -311,58 +403,67 @@
 						<Textarea
 							id="cust-about"
 							bind:value={aboutYou}
-							maxlength={3000}
+							maxlength={tierCaps.about}
 							placeholder="Interests, values, or preferences to keep in mind"
 							class="min-h-32 resize-y pr-16"
 						/>
 						<span class="pointer-events-none absolute bottom-2.5 right-3 text-xs text-muted-foreground">
-							{aboutYou.length}/3000
+							{aboutYou.length}/{tierCaps.about}
 						</span>
 					</div>
+					{#if aboutAtCap && showUpgradeHint}
+						<p class="text-xs text-primary">Upgrade for a longer About field</p>
+					{/if}
 				</div>
 
-				<!-- Actions -->
-				<div class="flex items-center justify-between pt-2">
-					<Button variant="outline">Load Legacy Data</Button>
-					<Button disabled>Save Preferences</Button>
+				<!-- Form-save toggles. Grouped with the form fields above so the
+				     "Save Preferences" button covers them in a single batch. -->
+				<div class="divide-y border-t pt-2">
+					<div class="flex items-start justify-between gap-6 py-5">
+						<div class="min-w-0">
+							<p class="font-semibold">Hide Personal Information</p>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Hides your name and email from the UI.
+							</p>
+						</div>
+						<Switch
+							bind:checked={hidePersonalInfo}
+							aria-label="Hide personal information"
+						/>
+					</div>
+					<div class="flex items-start justify-between gap-6 py-5">
+						<div class="min-w-0">
+							<p class="font-semibold">Stats for Nerds</p>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Enables more insights into message stats including tokens per second,
+								time to first token, and estimated tokens in the message.
+							</p>
+						</div>
+						<Switch bind:checked={statsForNerds} aria-label="Stats for nerds" />
+					</div>
+				</div>
+
+				<!-- Save bar — covers all form fields above (name, occupation,
+				     traits, about, hide personal info, stats for nerds). The
+				     auto-save sections below have their own immediate persistence
+				     and aren't affected by this button. -->
+				<div class="flex items-center justify-end gap-3 pt-2">
+					{#if saveStatus === 'saved'}
+						<span class="text-sm text-muted-foreground">Saved</span>
+					{:else if saveStatus === 'error'}
+						<span class="text-sm text-destructive">Couldn't save — try again</span>
+					{/if}
+					<Button
+						disabled={!isDirty || saveStatus === 'saving'}
+						onclick={savePreferences}
+					>
+						{saveStatus === 'saving' ? 'Saving…' : 'Save Preferences'}
+					</Button>
 				</div>
 			</div>
 		</section>
 
-		<!-- ── Behavior Options ──────────────────────────── -->
-		<section>
-			<h2 class="mb-2 text-2xl font-bold">Behavior Options</h2>
-			<div class="divide-y">
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Disable External Link Warning</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							Skip the confirmation dialog when clicking external links. Note: We cannot
-							guarantee the safety of external links, use this option at your own risk.
-						</p>
-					</div>
-					<Switch
-						bind:checked={disableExternalLinkWarning}
-						aria-label="Disable external link warning"
-					/>
-				</div>
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Invert Send/New Line Behavior</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							When enabled, use Enter for newlines, and a modifier key + Enter to send
-							messages. When disabled, use Enter to send and Shift + Enter for new lines.
-						</p>
-					</div>
-					<Switch
-						bind:checked={invertSendNewLine}
-						aria-label="Invert send and new line behavior"
-					/>
-				</div>
-			</div>
-		</section>
-
-		<!-- ── Visual Options ────────────────────────────── -->
+		<!-- ── Visual Options (auto-save) ─────────────────── -->
 		<section>
 			<h2 class="mb-2 text-2xl font-bold">Visual Options</h2>
 			<div class="divide-y">
@@ -381,116 +482,10 @@
 						aria-label="Use default colors"
 					/>
 				</div>
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Boring Theme</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							If you think the pink is too much, turn this on to tone it down.
-						</p>
-					</div>
-					<Switch bind:checked={boringTheme} aria-label="Boring theme" />
-				</div>
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Hide Personal Information</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							Hides your name and email from the UI.
-						</p>
-					</div>
-					<Switch bind:checked={hidePersonalInfo} aria-label="Hide personal information" />
-				</div>
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Disable Thematic Breaks</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							Hides horizontal lines in chat messages. (Some browsers have trouble
-							rendering these, turn off if you have bugs with duplicated lines)
-						</p>
-					</div>
-					<Switch
-						bind:checked={disableThematicBreaks}
-						aria-label="Disable thematic breaks"
-					/>
-				</div>
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Stats for Nerds</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							Enables more insights into message stats including tokens per second, time
-							to first token, and estimated tokens in the message.
-						</p>
-					</div>
-					<Switch bind:checked={statsForNerds} aria-label="Stats for nerds" />
-				</div>
-				<div class="flex items-start justify-between gap-6 py-5">
-					<div class="min-w-0">
-						<p class="font-semibold">Minimalist command menu</p>
-						<p class="mt-1 text-sm text-muted-foreground">
-							When enabled, command menu items are hidden until you start typing.
-						</p>
-					</div>
-					<Switch
-						bind:checked={minimalistCommandMenu}
-						aria-label="Minimalist command menu"
-					/>
-				</div>
-			</div>
-
-			<!-- Fonts -->
-			<div class="mt-8 grid gap-8 md:grid-cols-2">
-				<div class="space-y-6">
-					<div class="space-y-2">
-						<p class="font-semibold">Main Text Font</p>
-						<p class="text-sm text-muted-foreground">
-							Used in general text throughout the app.
-						</p>
-						<button
-							type="button"
-							class="flex w-full items-center justify-between rounded-lg border bg-background px-3.5 py-2.5 text-sm transition-colors hover:bg-accent/50"
-						>
-							<span>Inter <span class="text-muted-foreground">(default)</span></span>
-							<ChevronDownIcon class="size-4 text-muted-foreground" />
-						</button>
-					</div>
-					<div class="space-y-2">
-						<p class="font-semibold">Code Font</p>
-						<p class="text-sm text-muted-foreground">
-							Used in code blocks and inline code in chat messages.
-						</p>
-						<button
-							type="button"
-							class="flex w-full items-center justify-between rounded-lg border bg-background px-3.5 py-2.5 text-sm transition-colors hover:bg-accent/50"
-						>
-							<span>JetBrains Mono <span class="text-muted-foreground">(default)</span></span>
-							<ChevronDownIcon class="size-4 text-muted-foreground" />
-						</button>
-					</div>
-				</div>
-
-				<!-- Fonts Preview -->
-				<div>
-					<p class="mb-2 font-semibold">Fonts Preview</p>
-					<div class="rounded-xl border bg-card p-4">
-						<div class="flex justify-end">
-							<div class="max-w-[80%] rounded-2xl bg-accent px-4 py-2 text-sm">
-								Can you write me a simple hello world program?
-							</div>
-						</div>
-						<p class="mt-4 text-sm">Sure, here you go:</p>
-						<div class="mt-3 overflow-hidden rounded-lg border">
-							<div class="border-b bg-muted px-3 py-1.5 font-mono text-xs text-muted-foreground">
-								typescript
-							</div>
-							<pre class="overflow-x-auto bg-background p-3 font-mono text-xs leading-relaxed"><code>function greet(name: string) &lbrace;
-  console.log(`Hello, $&lbrace;name&rbrace;!`);
-  return true;
-&rbrace;</code></pre>
-						</div>
-					</div>
-				</div>
 			</div>
 		</section>
-		<!-- ── Code Blocks ────────────────────────────────── -->
+
+		<!-- ── Code Blocks (auto-save) ────────────────────── -->
 		<section>
 			<h2 class="mb-2 text-2xl font-bold">Code Blocks</h2>
 			<div class="divide-y">

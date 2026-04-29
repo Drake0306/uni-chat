@@ -26,6 +26,7 @@
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
+	import { customizationStore } from '$lib/stores/customization.svelte.js';
 	import { findModel, getDefaultModel } from '$lib/config/models.js';
 
 	const isMac = browser && /Mac/i.test(navigator.userAgent);
@@ -552,7 +553,11 @@
 									{...props}
 									class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent"
 								>
-									{#if authStore.avatarUrl && !avatarLoadFailed}
+									{#if customizationStore.hidePersonalInfo}
+										<div class="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+											?
+										</div>
+									{:else if authStore.avatarUrl && !avatarLoadFailed}
 										<img
 											src={authStore.avatarUrl}
 											alt=""
@@ -566,7 +571,9 @@
 										</div>
 									{/if}
 									<div class="flex flex-1 flex-col truncate">
-										<span class="truncate text-sm font-semibold">{authStore.displayName}</span>
+										<span class="truncate text-sm font-semibold">
+											{customizationStore.hidePersonalInfo ? 'Account' : authStore.displayName}
+										</span>
 										<span class="text-xs capitalize text-muted-foreground">{authStore.tier} plan</span>
 									</div>
 								</button>

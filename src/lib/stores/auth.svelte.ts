@@ -1,6 +1,7 @@
 import { supabase } from '$lib/supabase.js';
 import { colorsStore } from './colors.svelte.js';
 import { codeBlockSettings } from './code-block-settings.svelte.js';
+import { customizationStore } from './customization.svelte.js';
 import { clearSignedUrlCache } from '$lib/image-storage.js';
 import type { User, Session } from '@supabase/supabase-js';
 
@@ -50,7 +51,7 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 		supabase
 			.from('profiles')
 			.select(
-				'tier, onboarding_dismissed, use_default_colors, code_block_auto_collapse, code_block_collapse_lines'
+				'tier, onboarding_dismissed, use_default_colors, code_block_auto_collapse, code_block_collapse_lines, custom_name, custom_occupation, custom_traits, custom_about, hide_personal_info, stats_for_nerds'
 			)
 			.eq('id', user.id)
 			.single()
@@ -75,6 +76,17 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 						autoCollapse: data?.code_block_auto_collapse,
 						collapseLines: data?.code_block_collapse_lines,
 					});
+					// And for the user-customization fields (name/occupation/etc.).
+					if (data) {
+						customizationStore.syncFromDb({
+							custom_name: data.custom_name,
+							custom_occupation: data.custom_occupation,
+							custom_traits: data.custom_traits,
+							custom_about: data.custom_about,
+							hide_personal_info: data.hide_personal_info,
+							stats_for_nerds: data.stats_for_nerds,
+						});
+					}
 				},
 				() => {
 					tier = 'free';

@@ -47,6 +47,20 @@ export type LLMContentBlock =
 	| { type: 'text'; text: string }
 	| { type: 'image_url'; image_url: { url: string } };
 
+// Per-message streaming stats for the "Stats for Nerds" toggle. Recorded
+// client-side during the stream loop in chat-view.svelte; not persisted to
+// the DB (kept in-memory / localStorage fallback only). Token counts are
+// approximated from char length (≈ chars/4 for English).
+export type StreamStats = {
+	// Time-to-first-token: ms between request send and the first content
+	// (or reasoning) chunk arriving.
+	ttftMs: number;
+	// Total stream duration in ms — request send → stream close.
+	totalMs: number;
+	// Approximate output token count (content + reasoning, chars/4).
+	approxTokens: number;
+};
+
 export type Message = {
 	id: string;
 	role: 'user' | 'assistant';
@@ -56,6 +70,7 @@ export type Message = {
 	modelName?: string;
 	isError?: boolean;
 	attachments?: Attachment[];
+	streamStats?: StreamStats;
 };
 
 export type Chat = {
