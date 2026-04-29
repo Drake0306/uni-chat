@@ -471,7 +471,7 @@
 	     it must always be visible — the desktop sidebar is collapsed off-canvas
 	     and the only way to open the mobile sheet is via this trigger. -->
 	{#if !sidebar.open || sidebar.isMobile}
-		<div class="floating-toolbar absolute left-3 top-4 z-20 sm:top-3">
+		<div class="floating-toolbar absolute left-3 top-4 z-20 sm:top-3" data-onboarding="floating-toolbar-left">
 			<div class="flex items-center gap-0.5 rounded-xl bg-sidebar p-1 shadow-md ring-1 ring-sidebar-border">
 				<button
 					class="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97]"
@@ -533,6 +533,7 @@
 							{...props}
 							class="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97]"
 							title="Settings"
+							data-onboarding="settings-button"
 						>
 							<SettingsIcon class="size-4" />
 						</button>
@@ -540,7 +541,7 @@
 				</Popover.Trigger>
 				<Popover.Content align="end" side="bottom" class="w-56 p-3" sideOffset={8}>
 					<!-- Theme selector -->
-					<div class="space-y-3">
+					<div class="space-y-3" data-onboarding="theme-toggles">
 						<p class="text-sm font-semibold">Theme</p>
 						<ToggleGroup.Root
 							type="single"
@@ -779,6 +780,7 @@
 				class="max-h-50 min-h-25 resize-none border-0 bg-transparent px-1 py-2 text-base shadow-none focus-visible:ring-0 md:text-base"
 				rows={3}
 				onkeydown={handleKeydown}
+				data-onboarding="composer"
 			/>
 
 			<!-- Bottom row: model selector left, capability toggles right, send far right -->
@@ -807,6 +809,7 @@
 											: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
 									aria-label="Tools"
 									aria-expanded={toolsOpen}
+									data-onboarding="tools-mobile"
 								>
 									Tools
 									<ChevronDownIcon
@@ -936,7 +939,7 @@
 
 					<!-- Desktop: inline capability toggles. Hidden at <sm: where the
 					     consolidated Tools popover above takes over. -->
-					<div class="hidden items-center gap-1.5 sm:flex">
+					<div class="hidden items-center gap-1.5 sm:flex" data-onboarding="capability-toggles">
 						{#if showEffortPicker}
 							<DropdownMenu.Root>
 								<DropdownMenu.Trigger>

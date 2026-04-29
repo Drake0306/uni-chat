@@ -4,6 +4,7 @@
 	import AppSidebar from '$lib/components/app-sidebar.svelte';
 	import SyncPromptDialog from '$lib/components/sync-prompt-dialog.svelte';
 	import SessionExpiredDialog from '$lib/components/session-expired-dialog.svelte';
+	import OnboardingTour from '$lib/components/onboarding-tour.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { page } from '$app/state';
 	// Side-effect import: applies the persisted theme to <html> before any
@@ -52,3 +53,4 @@
 
 <SyncPromptDialog />
 <SessionExpiredDialog />
+<OnboardingTour />

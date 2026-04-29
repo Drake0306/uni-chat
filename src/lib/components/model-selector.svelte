@@ -139,7 +139,7 @@
 	</div>
 {/snippet}
 
-<div class="w-fit">
+<div class="w-fit" data-onboarding="model-selector">
 <Popover.Root bind:open>
 	<Popover.Trigger>
 		{#snippet child({ props })}

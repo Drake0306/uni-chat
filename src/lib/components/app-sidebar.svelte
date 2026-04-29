@@ -414,14 +414,14 @@
 			<div class="size-9"></div>
 		</div>
 
-		<div class="px-2 pb-1">
+		<div class="px-2 pb-1" data-onboarding="new-chat">
 			<Button variant="outline" class="w-full justify-start gap-2 text-sm font-semibold" onclick={newChat}>
 				<PlusIcon class="size-4" />
 				New Chat
 			</Button>
 		</div>
 
-		<div class="px-2 pb-1">
+		<div class="px-2 pb-1" data-onboarding="search-trigger">
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					{#snippet child({ props })}

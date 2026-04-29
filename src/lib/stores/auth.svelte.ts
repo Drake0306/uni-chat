@@ -6,6 +6,10 @@ let session = $state<Session | null>(null);
 let loading = $state(true);
 let tier = $state<'guest' | 'free' | 'pro' | 'max'>('guest');
 let pendingSyncDecision = $state(false);
+// Whether this user has dismissed the first-login onboarding tour. null
+// means we haven't fetched the profile yet (initial load) or the user is
+// a guest. Strict boolean false is the only state that triggers the tour.
+let onboardingDismissed = $state<boolean | null>(null);
 // Set true when SIGNED_OUT fires unexpectedly (refresh-token failure /
 // session revoked / token expired without a working refresh) so the UI
 // can prompt the user to sign in again. Distinguished from a user-initiated
@@ -42,19 +46,28 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 		// Fire-and-forget — does NOT block the callback
 		supabase
 			.from('profiles')
-			.select('tier')
+			.select('tier, onboarding_dismissed')
 			.eq('id', user.id)
 			.single()
 			.then(
 				({ data }) => {
 					tier = (data?.tier as typeof tier) ?? 'free';
+					// On error or missing column, fall back to true so we don't
+					// surprise the user with an unexpected tour. The tour is opt-in
+					// to seeing it, not opt-out.
+					onboardingDismissed =
+						typeof data?.onboarding_dismissed === 'boolean'
+							? data.onboarding_dismissed
+							: true;
 				},
 				() => {
 					tier = 'free';
+					onboardingDismissed = true;
 				}
 			);
 	} else {
 		tier = 'guest';
+		onboardingDismissed = null;
 	}
 
 	// Synchronous-only check: if a guest with localStorage chats just signed in,
@@ -111,6 +124,22 @@ export const authStore = {
 	},
 	acknowledgeSessionExpired() {
 		sessionExpired = false;
+	},
+	get onboardingDismissed() {
+		return onboardingDismissed;
+	},
+	// Optimistic write: flip the local state immediately so the tour
+	// hides without waiting on the network round-trip; persist to DB
+	// in the background. We don't revert on error — better to keep it
+	// dismissed locally than re-show the tour on a one-off network blip.
+	async dismissOnboarding() {
+		if (!user) return;
+		onboardingDismissed = true;
+		const { error } = await supabase
+			.from('profiles')
+			.update({ onboarding_dismissed: true })
+			.eq('id', user.id);
+		if (error) console.error('[auth] dismissOnboarding failed:', error.message);
 	},
 
 	get displayName() {
