@@ -9,6 +9,8 @@
 // the bundle, but only when the user actually attaches one. Text files use
 // the built-in File.text() API, no library needed.
 
+import type { TextAttachment } from './types.js';
+
 // Per-file soft cap on the source bytes. Keeps PDF.js parsing snappy and
 // the eventual base64 payload (when we wire native PDF) within provider
 // request-size limits.
@@ -56,6 +58,26 @@ const TEXT_FILENAMES = new Set([
 	'license', 'readme', 'changelog', 'authors',
 ]);
 
+// Image formats accepted on vision-capable models. Kept in lockstep with
+// the bucket's allowed_mime_types in migration 20260429180000_chat_attachments_storage.sql.
+export const IMAGE_MIME_TYPES = [
+	'image/png',
+	'image/jpeg',
+	'image/jpg',
+	'image/webp',
+	'image/gif',
+	'image/heic',
+	'image/heif',
+];
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif']);
+
+export function isImageFile(file: File): boolean {
+	if (file.type.startsWith('image/')) return true;
+	const ext = getExtension(file.name);
+	return IMAGE_EXTENSIONS.has(ext);
+}
+
 export type ExtractedFile = {
 	name: string;
 	mimeType: string;
@@ -67,14 +89,26 @@ export type ExtractedFile = {
 };
 
 // Single source of truth for the file picker's `accept` attribute. Generated
-// from TEXT_EXTENSIONS + PDF + the text/* MIME catch-all so adding a new
-// extension to the allowlist automatically updates the picker.
-export const ATTACHMENT_ACCEPT = [
+// from TEXT_EXTENSIONS + PDF + the text/* MIME catch-all (always allowed)
+// plus images on vision-capable models. Adding an extension to the relevant
+// set automatically updates the picker.
+const TEXT_ACCEPT_PARTS = [
 	'application/pdf',
 	'text/*',
 	...[...TEXT_EXTENSIONS].map((ext) => `.${ext}`),
 	'.pdf',
-].join(',');
+];
+const IMAGE_ACCEPT_PARTS = [...IMAGE_MIME_TYPES, ...[...IMAGE_EXTENSIONS].map((ext) => `.${ext}`)];
+
+/**
+ * Builds the `accept=` string for the file picker. Pass `supportsVision: true`
+ * when the active model has `capabilities.vision === true` so the OS dialog
+ * filter includes images; otherwise images are excluded and the runtime
+ * checker also rejects them in handleFileSelect.
+ */
+export function getAttachmentAccept(supportsVision: boolean): string {
+	return (supportsVision ? [...TEXT_ACCEPT_PARTS, ...IMAGE_ACCEPT_PARTS] : TEXT_ACCEPT_PARTS).join(',');
+}
 
 function getExtension(filename: string): string {
 	const dot = filename.lastIndexOf('.');
@@ -300,21 +334,27 @@ function safeFence(text: string): string {
 // fence and back-references it for the close.
 export function parseLegacyAttachments(
 	content: string
-): { content: string; attachments: Array<{ name: string; mimeType: string; pageCount?: number; text: string }> } | null {
+): { content: string; attachments: TextAttachment[] } | null {
 	const firstMarker = content.indexOf('\n\n📎 **');
 	if (firstMarker < 0) return null;
 
 	const typed = content.slice(0, firstMarker);
 	let rest = content.slice(firstMarker);
-	const attachments: Array<{ name: string; mimeType: string; pageCount?: number; text: string }> = [];
+	const attachments: TextAttachment[] = [];
 
 	// Each iteration consumes one attachment block from the start of `rest`.
-	const blockRe = /^\n\n📎 \*\*(.+?)\*\*(?: \((\d+) pages?, extracted text\))?\n(`{3,})[^\n]*\n([\s\S]*?)\n\3(?=\n\n📎|\s*$)/;
+	// Lookahead intentionally absent: `safeFence` ensures the outer fence is
+	// always longer than any backtick run inside `f.text`, so the closing
+	// fence is unambiguous via the `\3` back-reference. Earlier versions
+	// required `(?=\n\n📎|\s*$)` which mis-rejected legacy messages whose
+	// final block was followed by trailing prose ("…```\nthanks!").
+	const blockRe = /^\n\n📎 \*\*(.+?)\*\*(?: \((\d+) pages?, extracted text\))?\n(`{3,})[^\n]*\n([\s\S]*?)\n\3/;
 	while (rest.startsWith('\n\n📎 **')) {
 		const m = blockRe.exec(rest);
 		if (!m) break;
 		const [whole, name, pageCountStr, , text] = m;
 		attachments.push({
+			kind: 'text',
 			name,
 			mimeType: name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain',
 			...(pageCountStr ? { pageCount: parseInt(pageCountStr, 10) } : {}),

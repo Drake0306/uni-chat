@@ -1,7 +1,19 @@
 import { supabase } from '$lib/supabase.js';
 import { authStore } from '$lib/stores/auth.svelte.js';
 import { parseLegacyAttachments } from '$lib/file-extract.js';
-import type { Chat, Message } from '$lib/types.js';
+import { deleteChatImages } from '$lib/image-storage.js';
+import type { Attachment, Chat, Message } from '$lib/types.js';
+
+// Backfill `kind: 'text'` for attachments persisted before the
+// discriminated-union shape landed. Without this the renderer's
+// `a.kind === 'image'` checks would silently fail on existing rows.
+function normalizeAttachments(raw: unknown): Attachment[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	return raw.map((a: Record<string, unknown>) => {
+		if (a.kind === 'image' || a.kind === 'text') return a as unknown as Attachment;
+		return { kind: 'text', ...a } as Attachment;
+	});
+}
 
 const STORAGE_KEY = 'unichat_chats';
 const MAX_LOCAL_CHATS = 50;
@@ -92,6 +104,14 @@ function loadFromLocalStorage(): (Chat & { messages: Message[] })[] {
 		for (const chat of parsed) {
 			if (!chat.messages) continue;
 			for (const m of chat.messages) {
+				// First backfill kind: 'text' for any attachment array missing
+				// the discriminator (rows saved before the union shape).
+				if (m.attachments) {
+					const normalized = normalizeAttachments(m.attachments);
+					if (normalized) m.attachments = normalized;
+				}
+				// Then split legacy embedded "📎 **" content for messages
+				// that pre-date the attachments split entirely.
 				if (!m.attachments && m.content && m.content.includes('📎 **')) {
 					const split = parseLegacyAttachments(m.content);
 					if (split) {
@@ -143,11 +163,9 @@ function mapChatRow(row: Record<string, unknown>): Chat {
 function mapMessageRow(row: Record<string, unknown>): Message {
 	// `attachments` is JSONB on the messages table — Supabase already
 	// parses it. Defensive null/undefined guard so older rows (pre-migration)
-	// stay readable.
-	const rawAttachments = row.attachments;
-	let attachments = Array.isArray(rawAttachments)
-		? (rawAttachments as Message['attachments'])
-		: undefined;
+	// stay readable; normalizeAttachments backfills `kind: 'text'` for rows
+	// saved before the discriminator was introduced.
+	let attachments = normalizeAttachments(row.attachments);
 	let content = row.content as string;
 
 	// Legacy format split: rows saved BEFORE the attachments column existed
@@ -605,7 +623,16 @@ export const chatStore = {
 		}
 		updateLocalChat(chatId, (chat) => {
 			const msg = chat.messages.find((m) => m.id === messageId);
-			if (msg) Object.assign(msg, updates);
+			if (!msg) return;
+			// Mirror the DB-branch whitelist instead of Object.assign so a
+			// caller passing `{ attachments: undefined }` (or any other
+			// unrelated key) can't accidentally clobber fields we don't
+			// intend to mutate. updateMessage today only patches streaming-
+			// response state — content / reasoning / modelName / isError.
+			if (updates.content !== undefined) msg.content = updates.content;
+			if (updates.reasoning !== undefined) msg.reasoning = updates.reasoning;
+			if (updates.modelName !== undefined) msg.modelName = updates.modelName;
+			if (updates.isError !== undefined) msg.isError = updates.isError;
 		});
 	},
 
@@ -638,6 +665,16 @@ export const chatStore = {
 		if (useSupabase()) {
 			try {
 				await supabase.from('chats').delete().eq('id', chatId);
+				// Fire-and-forget: clean up any image attachments that lived
+				// under this chat in Storage. RLS prevents cross-user spillover.
+				// Failures are logged inside deleteChatImages and don't block
+				// the user-visible delete.
+				const userId = authStore.user?.id;
+				if (userId) {
+					deleteChatImages(userId, chatId).catch((err) =>
+						console.error('[chats] image cleanup failed:', err)
+					);
+				}
 			} catch {
 				// ignore
 			}
@@ -710,15 +747,22 @@ export const chatStore = {
 			// fails the whole atomic batch insert — defensive validation here.
 			const validMessages = chat.messages
 				.filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
-				.map((m) => ({
-					chat_id: newChat.id,
-					role: m.role,
-					content: m.content ?? '',
-					reasoning: m.reasoning ?? null,
-					model_name: m.modelName ?? null,
-					is_error: m.isError ?? false,
-					attachments: m.attachments?.length ? m.attachments : null,
-				}));
+				.map((m) => {
+					// Strip image attachments during migration: their
+					// `storagePath` references a `<userId>/<chatId>/...`
+					// location that doesn't exist in Storage. Text/PDF
+					// content is inline and migrates cleanly.
+					const safe = m.attachments?.filter((a) => a.kind !== 'image');
+					return {
+						chat_id: newChat.id,
+						role: m.role,
+						content: m.content ?? '',
+						reasoning: m.reasoning ?? null,
+						model_name: m.modelName ?? null,
+						is_error: m.isError ?? false,
+						attachments: safe?.length ? safe : null,
+					};
+				});
 
 			if (validMessages.length > 0) {
 				const { data: inserted, error: msgError } = await supabase

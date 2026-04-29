@@ -45,12 +45,12 @@ src/
     api/
       chat/+server.ts         ← unified router: validates, rate-limits, forwards to provider, tee() saves response server-side
       providers/
-        gemini/+server.ts     ← Google Gemini (free, transforms Gemini SSE → OpenAI format, thinking support)
-        openrouter/+server.ts ← OpenRouter (free, passthrough)
-        groq/+server.ts       ← Groq (free, passthrough)
-        mistral/+server.ts    ← Mistral (free, passthrough)
-        anthropic/+server.ts  ← stub (403, paid)
-        openai/+server.ts     ← stub (403, paid)
+        gemini/+server.ts     ← Gemini (free); transforms Gemini SSE → OpenAI; thinking; image blocks → inline_data via server fetch + base64
+        openrouter/+server.ts ← OpenRouter (free); passthrough; OpenAI content arrays flow through for vision
+        groq/+server.ts       ← Groq (free); passthrough; vision works on Llama 4 via OpenAI content arrays
+        mistral/+server.ts    ← Mistral (free); passthrough; Pixtral / Mistral Large eat OpenAI content arrays
+        anthropic/+server.ts  ← stub (403, paid). When enabled, needs an image transformer (image_url → {type:'image', source:{...}})
+        openai/+server.ts     ← real passthrough; gated on OPENAI_API_KEY + per-model enabled flag; reasoning_effort for o-series
         xai/+server.ts        ← stub (403, paid)
         deepseek/+server.ts   ← stub (403, paid)
         moonshot/+server.ts   ← stub (403, paid)
@@ -61,7 +61,8 @@ src/
     supabase.ts               ← browser Supabase client (createBrowserClient from @supabase/ssr)
     markdown.ts               ← unified pipeline (lazy-loaded: all deps dynamically imported on first use)
     file-extract.ts           ← client-side file → text (PDF.js for PDFs, File.text() for code/text), legacy parser, fence-collision-safe markdown helper
-    types.ts                  ← shared Message + Attachment + Chat types
+    image-storage.ts          ← Supabase Storage upload + 1-hour signed-URL helper for image attachments (V2)
+    types.ts                  ← shared Message + Attachment (text/image union) + LLMContentBlock + Chat types
     config/
       models.ts               ← SINGLE SOURCE OF TRUTH for companies, models, routes, typed capabilities
     server/
@@ -152,18 +153,32 @@ avatar, badge, button, command, dialog, dropdown-menu, input, popover, scroll-ar
 - **Server-side response persistence:** `/api/chat` uses `tee()` to split the LLM stream — one branch streams to client, the other accumulates and saves to Supabase via service client. Responses survive browser refresh/close. Client sends `chatId` + `messageId` in the request body (authenticated users only). Server creates an empty assistant message row immediately, updates with full content when stream completes. Client polls every 3s for pending responses.
 - **Browser Supabase client uses `cache: 'no-store'`** to prevent stale query results on refresh.
 
-## File Attachments (PDFs + text/code)
+## File Attachments
 
-- **Universal text path.** PDFs are extracted via PDF.js (lazy-loaded on first attach), text/code files via `File.text()`. Extracted content is stored on `Message.attachments[]` (separate from `Message.content`) and folded back into a single string at request time so every provider receives the existing `{ role, content: string }` shape — no per-provider transformer needed for the V1 (text) path. The Gemini route already wraps `msg.content` into `parts: [{ text }]`; OpenRouter / Groq / Mistral pass through.
-- **Type shape** (`src/lib/types.ts`): `Attachment = { name, mimeType, pageCount?, text }`. `Message` adds `attachments?: Attachment[]`.
-- **Where extraction runs** (`src/lib/file-extract.ts`): `extractFile(file)` returns `ExtractedFile`; the chat-view persists a stripped `Attachment` (drops the `language` hint — re-derived from filename via `attachmentsToMarkdown` on replay).
-- **LLM payload assembly.** Inline inside `chat-view.svelte`'s `messages.map` (the `/api/chat` body builder): `m.attachments?.length ? `${m.content}\n\n${attachmentsToMarkdown(m.attachments)}` : m.content`. Attachments are NEVER folded into stored `content` — split on read, joined on send.
-- **Fence-collision safety.** `attachmentsToMarkdown` calls `safeFence(text)` which counts the longest backtick run in the body and uses a fence one longer. Required so attached `.md` files (or code with embedded fences) don't break out of the outer wrapper.
-- **Capability gating.** The paperclip is **not** gated on `capabilities.files` — text/PDF works on every model uniformly. The `files` flag on `ModelCapabilities` is now reserved for IMAGE/native-document attachments (V2). Don't reintroduce the `{#if capabilities.files}` guard around the desktop attach button or the mobile Tools popover row.
-- **Limits** (`src/lib/file-extract.ts`): `MAX_FILE_BYTES = 25 MB` per file (source bytes), `MAX_TOTAL_BYTES = 50 MB` cumulative across one message, `MAX_EXTRACTED_CHARS_PER_FILE = 500_000` (~125K tokens) on the extracted text — guards against a 25 MB code repo dumping 25 MB of context.
-- **Persistence** (migration `20260429160000_message_attachments.sql`): adds `attachments jsonb` column. `mapMessageRow` and `loadFromLocalStorage` apply `parseLegacyAttachments` to messages saved before the split — pure read-time transform, never rewrites the row. Detects the old `📎 **filename** (...)` + fenced-block format with dynamic fence backreference.
-- **Display:** user bubble shows just `message.content`; attachments render as compact chips below the bubble with filename + page count for PDFs. Chip remove + the desktop attach button are both `disabled` while `isExtracting` to close the mid-extraction race.
-- **PDF.js worker** is configured via `import('pdfjs-dist/build/pdf.worker.mjs?url')` — works with Vite's asset import. The `pdfjsPromise` cache resets on rejection so a transient failure doesn't poison subsequent attaches. Each PDF document is `destroy()`-ed in a `finally` block to release worker memory deterministically.
+### Text / PDF (universal across providers)
+
+- **Universal text path.** PDFs extract via PDF.js (lazy-loaded), text/code via `File.text()`. Extracted content lives on `Message.attachments[]` (separate from `Message.content`) and is folded into a single string at request time so every provider receives the existing `{ role, content: string }` shape.
+- **Type shape** (`src/lib/types.ts`): `Attachment` is a discriminated union `TextAttachment | ImageAttachment` (V2). Backward compat: rows without `kind` are normalized to `kind:'text'` on read by `normalizeAttachments` in chats store.
+- **LLM payload assembly.** In `chat-view.svelte`'s `buildMessagesPayload`: text attachments fold into the content string via `attachmentsToMarkdown`; images promote the content to an OpenAI-shape `LLMContentBlock[]` (see Images below). Attachments are NEVER folded into stored `content`.
+- **Fence-collision safety.** `attachmentsToMarkdown` calls `safeFence(text)` — counts the longest backtick run in the body, uses a fence one longer. Required so attached `.md` files don't break the outer wrapper.
+- **Capability gating.** Paperclip is **not** gated on `capabilities.files` — text/PDF works on every model. The `files` flag is reserved for native-document V2 (Anthropic / Mistral OCR shapes).
+- **Limits** (`src/lib/file-extract.ts`): `MAX_FILE_BYTES = 25 MB` per file (source), `MAX_TOTAL_BYTES = 50 MB` cumulative, `MAX_EXTRACTED_CHARS_PER_FILE = 500_000` (~125K tokens) on extracted text.
+- **Persistence** (migration `20260429160000_message_attachments.sql`): `attachments jsonb` column. `mapMessageRow` + `loadFromLocalStorage` apply `parseLegacyAttachments` for messages saved before the split (detects `📎 **filename**` + fenced-block format with dynamic fence backreference). Pure read-time transform — never rewrites the row.
+- **Display:** user bubble shows `message.content` only; attachments render as compact chips below. Chip remove + desktop attach button are `disabled` while `isExtracting` to close the mid-extraction race.
+- **PDF.js worker** is `import('pdfjs-dist/build/pdf.worker.mjs?url')`. The `pdfjsPromise` cache resets on rejection. Each `PDFDocumentProxy` is `destroy()`-ed in `finally`.
+
+### Images (vision-capable models only — V2)
+
+- **Stored in Supabase Storage**, not inline. Bucket `chat-attachments` (private). Path: `<user_id>/<chat_id>/<message_id>/<filename>`. RLS policies gate read/insert/delete by `(storage.foldername(name))[1] = auth.uid()`. Migration: `20260429180000_chat_attachments_storage.sql` (idempotent: `on conflict do nothing` + `drop policy if exists`).
+- **Type:** `ImageAttachment = { kind:'image', name, mimeType, storagePath, width?, height? }`. We persist the path, never the URL.
+- **Signed URLs** are 1-hour, regenerated per-read by `getSignedImageUrl` in `image-storage.ts`. In-memory cache refreshes ~1 min before expiry. Lazy-loaded in the bubble via `{#await getSignedImageUrl}`.
+- **LLM payload** switches from string content to `LLMContentBlock[]` the moment any message in the request carries an image: `[{type:'text', text}, {type:'image_url', image_url:{url: signedUrl}}]`. Built in `chat-view.svelte`'s `buildMessagesPayload`.
+- **Provider routes:** OpenRouter / Groq / Mistral / OpenAI accept content arrays natively — passthrough. Gemini transformer fetches each `image_url` server-side, base64-encodes, emits Gemini `inline_data` parts. Image fetch failures are logged and the image is silently dropped (lenient — better to send the rest than 500 the request).
+- **Picker gating** (`getAttachmentAccept(supportsVision)` builds the `accept=`): images allowed only when `currentModel.capabilities.vision === true` AND authenticated AND not temp-mode. `handleFileSelect` enforces all three with distinct error messages per rejection class.
+- **Per-message count caps.** App-wide: 10 files, 10 images. Per-model image cap via optional `Model.maxImagesPerMessage` (Groq Llama 4 = 5, Mistral Pixtral / Large = 8) — `imageCap = min(app cap, model cap)`. Attach button disables at file cap; rejected picks surface a per-class warning. Model switch that leaves the user over the new cap shows an inline `overImageCap` alert and disables Send until resolved (no silent drops).
+- **Send-flow ordering matters.** `createChat` runs BEFORE image upload because the Storage path embeds `chat_id`; the user message id is pre-allocated so Storage path and DB row line up. Don't reorder.
+- **Anthropic still pending.** When `anthropic/+server.ts` is un-stubbed, it needs its own image transformer (`image_url` → `{type:'image', source:{type:'url'|'base64', ...}}`).
+- **Privacy caveat — signed URLs travel to third-party providers.** OpenRouter / OpenAI / Mistral / Groq receive the request body containing `image_url.url` (a Supabase signed URL valid for 1 h) and very likely log it. Anyone with access to those provider logs can fetch the image until the URL expires. Gemini avoids this — its transformer fetches and base64-inlines server-side. Acceptable trade-off for V1; if it matters, switch the OpenAI-shape providers to base64-inline too (extra server-side fetch + bandwidth) or shorten the URL TTL to ~5 min for the LLM hop.
 
 ## Rate Limiting
 
@@ -224,13 +239,11 @@ Provider research docs are in `docs/providers/`. Full model reference table at `
 - **bits-ui `Command.Dialog`'s `value` prop binds to the highlighted item, NOT the input text.** To get the search query, `bind:value` on `Command.Input`, not on `Command.Dialog`. Doing it wrong causes an infinite loop because cmdk's selection state syncs back into the search query.
 - **`for...of` on a `$state` proxy inside `$derived.by` can have tracking edge cases.** Prefer plain `.filter()` / indexed `for` loops with explicit `.length` reads.
 - **Don't fold attachments into `Message.content`.** A previous version of the composer concatenated extracted file text into the message body (`fullText = text + "\n\n" + attachmentsToMarkdown(...)`), which dumped 50 KB of fenced PDF into the user's bubble, polluted Copy, and made Auto-title see file content. The current contract is: `content` = typed text only, `attachments` = structured array, recombined ONLY at fetch time inside `messages.map`. The legacy parser exists to migrate older rows on read; don't write that shape back.
-- **Don't gate the paperclip on `capabilities.files`.** The text/PDF path is universal — every provider eats plain text. The capability flag is reserved for image/native-document V2 and gates IMAGE attachments only.
+- **Don't gate the paperclip on `capabilities.files`.** The text/PDF path is universal — every provider eats plain text. The capability flag is reserved for native-document V2.
+- **Don't upload images before `createChat`.** The Storage path embeds `chat_id`; uploading before the chat row exists writes to a phantom path the DB will never reference. handleSend's order is: extract text → createChat → pre-allocate userMsgId → upload images (path uses that id) → push userMsg → fetch.
 
 ## Production / TOS notes
 
 - **Free tiers (Groq Developer, OpenRouter `:free`, Gemini free tier) are dev-only.** Commercial deployment at scale violates TOS — switch to paid plans (Groq On-Demand, OpenRouter paid routes, Gemini billed) before launch. Same code, different API keys.
 - **Always verify TOS directly with the provider** before launching a paid product on top of their inference.
 
-## Pin migration (2026-04-27)
-
-`supabase/migrations/20260427120000_pin_chats.sql` adds `pinned boolean not null default false` to the `chats` table plus a composite index `(user_id, pinned, updated_at desc)`. Existing rows default to `pinned = false`. Run via `npx supabase db push`. The migration is additive — existing data and columns are untouched.

@@ -19,6 +19,9 @@
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import MonitorIcon from '@lucide/svelte/icons/monitor';
+	import XIcon from '@lucide/svelte/icons/x';
+	import DownloadIcon from '@lucide/svelte/icons/download';
+	import { fade, scale } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { untrack, tick } from 'svelte';
 	import { useSidebar } from '$lib/components/ui/sidebar/index.js';
@@ -37,17 +40,19 @@
 	import {
 		extractFile,
 		isSupportedFile,
+		isImageFile,
 		attachmentsToMarkdown,
 		looksLikeScannedPdf,
-		ATTACHMENT_ACCEPT,
+		getAttachmentAccept,
 		MAX_TOTAL_BYTES,
 		type ExtractedFile,
 	} from '$lib/file-extract.js';
+	import { uploadImageToStorage, getSignedImageUrl } from '$lib/image-storage.js';
 	import { commandStore } from '$lib/stores/command.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
 	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
-	import type { Message } from '$lib/types.js';
+	import type { Message, TextAttachment, ImageAttachment, LLMContentBlock } from '$lib/types.js';
 
 	let { chatId }: { chatId?: string } = $props();
 
@@ -89,6 +94,13 @@
 	function toggleTempChat() {
 		tempChatEnabled = !tempChatEnabled;
 		chatStore.clearActive();
+		// Image attachments require a saved chat (Storage path embeds the
+		// chat_id) — drop any staged images when entering temp mode so the
+		// user isn't left with chips that can't actually be sent. Text/PDF
+		// stay; they're inline content and work in temp mode fine.
+		if (tempChatEnabled) {
+			attachedFiles = attachedFiles.filter((f) => !isImageFile(f));
+		}
 		goto('/', { replaceState: true });
 	}
 
@@ -167,6 +179,39 @@
 	// Display-only for now — actual transmission to the provider is a
 	// follow-up task (per-provider base64 encoding, content-type handling).
 	let attachedFiles = $state<File[]>([]);
+	// Image lightbox: clicking a thumbnail in a sent message opens the
+	// original in a centered modal instead of a new tab.
+	let openImage = $state<{ url: string; name: string } | null>(null);
+	let openImageLoaded = $state(false);
+	// Tracks which thumbnail images have finished decoding. Keyed by storage
+	// path so the state survives the modal opening / message scrolling.
+	// $state on a plain object works in Svelte 5 — property assignments
+	// trigger re-renders of consumers reading those keys.
+	let imgLoaded = $state<Record<string, boolean>>({});
+
+	// Programmatic download — Supabase signed URLs are cross-origin so the
+	// HTML `download` attribute on <a> is ignored by the browser and it
+	// navigates instead. Fetch as blob, mint a same-origin object URL, click
+	// a temporary anchor, revoke. Falls back to opening in a new tab on error.
+	async function downloadOpenImage() {
+		if (!openImage) return;
+		try {
+			const res = await fetch(openImage.url);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			const blobUrl = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = blobUrl;
+			a.download = openImage.name;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			URL.revokeObjectURL(blobUrl);
+		} catch (err) {
+			console.error('[chat-view] image download failed:', err);
+			window.open(openImage.url, '_blank', 'noopener,noreferrer');
+		}
+	}
 	let fileInputEl: HTMLInputElement | undefined = $state();
 
 	// Mobile-only consolidated "Tools" popover. Two views swapped in place:
@@ -178,6 +223,44 @@
 
 	const currentModel = $derived(findModel(selectedModel.companyId, selectedModel.modelId));
 	const showEffortPicker = $derived(!!currentModel?.capabilities.thinking);
+
+	// Per-message attachment caps. App-wide hard ceiling matches what
+	// ChatGPT / Gemini / Perplexity show in their composers — every major
+	// chat app blocks extras at the picker rather than failing on submit.
+	// The image cap narrows further if the active model has a stricter
+	// API limit (Groq Llama 4 = 5, Mistral Pixtral / Large = 8). Defined
+	// here rather than file-extract.ts because they're UI-policy, not
+	// extraction limits.
+	const MAX_FILES_PER_MESSAGE = 10;
+	const DEFAULT_MAX_IMAGES_PER_MESSAGE = 10;
+	const imageCap = $derived(
+		Math.min(
+			DEFAULT_MAX_IMAGES_PER_MESSAGE,
+			currentModel?.maxImagesPerMessage ?? DEFAULT_MAX_IMAGES_PER_MESSAGE
+		)
+	);
+	const stagedImageCount = $derived(attachedFiles.filter((f) => isImageFile(f)).length);
+	const stagedFileCount = $derived(attachedFiles.length);
+	const atFileCap = $derived(stagedFileCount >= MAX_FILES_PER_MESSAGE);
+	const atImageCap = $derived(stagedImageCount >= imageCap);
+	// True when a model swap left more images staged than the new model
+	// supports. Surfaces an inline warning + disables Send until the user
+	// removes some or switches back.
+	const overImageCap = $derived(stagedImageCount > imageCap);
+	// Hard-stop signal for the attach button — true when EITHER cap is
+	// reached. Image cap reached on a vision-capable model still blocks
+	// even though file cap may not be — matches the user-stated UX
+	// preference of "disable when at limit, no half-states".
+	const attachDisabled = $derived(atFileCap || atImageCap);
+
+	// Drives the file picker's accept attribute. Vision-capable models add
+	// image MIME types + extensions; text-only models exclude images. ALSO
+	// excluded once the active model's image cap is hit — belt-and-suspenders
+	// so even if the disabled-state on the button is somehow bypassed, the
+	// OS dialog won't offer images and handleFileSelect would reject them.
+	const attachmentAccept = $derived(
+		getAttachmentAccept(!!currentModel?.capabilities.vision && !atImageCap)
+	);
 	const thinkingActive = $derived(effort !== 'fast');
 	// Tints the mobile Tools pill when any tool is on, so users can see at a
 	// glance that a non-default behavior is active without opening the popover.
@@ -200,6 +283,27 @@
 		}
 	});
 
+	// Drop staged images if the user signs out mid-compose. Storage uploads
+	// require auth.uid(), so without a session those images can't be sent
+	// anyway — clearing them up front avoids a confusing "Image attachments
+	// require sign-in" error at handleSend time. Text/PDF stay (they don't
+	// need auth).
+	//
+	// Guard on `authStore.loading` so we don't trip on transient flicker
+	// during init or a token refresh — the auth listener can briefly report
+	// `isAuthenticated: false` between events even when the user never
+	// actually signed out.
+	let prevAuth = false;
+	$effect(() => {
+		const isAuthed = authStore.isAuthenticated;
+		const isLoading = authStore.loading;
+		if (isLoading) return;
+		if (prevAuth && !isAuthed) {
+			attachedFiles = attachedFiles.filter((f) => !isImageFile(f));
+		}
+		prevAuth = isAuthed;
+	});
+
 	// Reset toggles on model change
 	let prevModelId: string | undefined;
 	$effect(() => {
@@ -212,34 +316,124 @@
 			// localStorage); when the user returns to a compatible model the
 			// previous preference is still there.
 			//
-			// Attached files are per-message content, not a preference — they
-			// only make sense for the next send and would be stale across a
-			// model switch, so we clear them.
-			attachedFiles = [];
+			// Attachments: text/PDF works on every model uniformly so we keep
+			// them. Images, however, only make sense on vision-capable models
+			// — drop them when switching to a text-only model. When switching
+			// between two vision-capable models with different image caps,
+			// keep everything staged: the `overImageCap` warning + disabled
+			// Send button cover the cap-exceeded case so the user can
+			// consciously remove or switch back.
+			const newModel = findModel(selectedModel.companyId, selectedModel.modelId);
+			if (!newModel?.capabilities.vision) {
+				attachedFiles = attachedFiles.filter((f) => !isImageFile(f));
+			}
 		}
 		prevModelId = id;
 	});
 
 	function openFilePicker() {
+		// Defensive guard: even though the buttons that call this are
+		// `disabled` when at cap, this catches programmatic / keyboard
+		// triggers that might bypass the UI state.
+		if (attachDisabled || isExtracting || isGuest) return;
 		fileInputEl?.click();
 	}
 
 	function handleFileSelect(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
 		const picked = Array.from(input.files ?? []);
-		// Filter to supported types up-front so the chip area never shows
-		// something we can't actually send. Anything skipped surfaces as a
-		// brief warning in attachmentError.
+		// Filter to supported types AND count caps up-front so the chip
+		// area never shows something we can't actually send. Image
+		// attachments have stricter requirements (vision-capable model,
+		// authenticated, not temp mode); text/PDF are universal.
+		// Per-message count caps mirror what ChatGPT / Gemini / Perplexity
+		// do — block at the picker rather than fail at submit.
 		const accepted: File[] = [];
-		const rejected: string[] = [];
+		const rejectedUnsupported: string[] = [];
+		const rejectedNoVision: string[] = [];
+		const rejectedGuest: string[] = [];
+		const rejectedTemp: string[] = [];
+		const rejectedFileCap: string[] = [];
+		const rejectedImageCap: string[] = [];
+		// Track running totals against the existing staged count — picking
+		// a 6th file when 5 are already staged is the same as picking 6 now.
+		let runningFiles = stagedFileCount;
+		let runningImages = stagedImageCount;
+		const rejectedEmpty: string[] = [];
 		for (const f of picked) {
-			if (isSupportedFile(f)) accepted.push(f);
-			else rejected.push(f.name);
+			// Zero-byte files are universally useless: PDF.js parses to "",
+			// File.text() returns "", image displays as broken. Reject early.
+			if (f.size === 0) {
+				rejectedEmpty.push(f.name);
+				continue;
+			}
+			if (runningFiles >= MAX_FILES_PER_MESSAGE) {
+				rejectedFileCap.push(f.name);
+				continue;
+			}
+			if (isImageFile(f)) {
+				if (!currentModel?.capabilities.vision) {
+					rejectedNoVision.push(f.name);
+					continue;
+				}
+				if (!authStore.isAuthenticated) {
+					rejectedGuest.push(f.name);
+					continue;
+				}
+				if (tempChatEnabled) {
+					rejectedTemp.push(f.name);
+					continue;
+				}
+				if (runningImages >= imageCap) {
+					rejectedImageCap.push(f.name);
+					continue;
+				}
+				accepted.push(f);
+				runningImages++;
+				runningFiles++;
+			} else if (isSupportedFile(f)) {
+				accepted.push(f);
+				runningFiles++;
+			} else {
+				rejectedUnsupported.push(f.name);
+			}
 		}
 		attachedFiles = [...attachedFiles, ...accepted];
-		attachmentError = rejected.length
-			? `Skipped unsupported file${rejected.length === 1 ? '' : 's'}: ${rejected.join(', ')}`
-			: '';
+		const errors: string[] = [];
+		if (rejectedNoVision.length) {
+			errors.push(
+				`This model doesn't support images: ${rejectedNoVision.join(', ')} — switch to a vision-capable model.`
+			);
+		}
+		if (rejectedGuest.length) {
+			errors.push(`Sign in to attach images: ${rejectedGuest.join(', ')}.`);
+		}
+		if (rejectedTemp.length) {
+			errors.push(
+				`Image attachments aren't supported in temporary chats: ${rejectedTemp.join(', ')}.`
+			);
+		}
+		if (rejectedFileCap.length) {
+			errors.push(
+				`Up to ${MAX_FILES_PER_MESSAGE} files per message — skipped ${rejectedFileCap.join(', ')}.`
+			);
+		}
+		if (rejectedImageCap.length) {
+			errors.push(
+				`${currentModel?.name ?? 'This model'} accepts up to ${imageCap} image${imageCap === 1 ? '' : 's'} per message — skipped ${rejectedImageCap.join(', ')}.`
+			);
+		}
+		if (rejectedUnsupported.length) {
+			errors.push(
+				`Skipped unsupported file${rejectedUnsupported.length === 1 ? '' : 's'}: ${rejectedUnsupported.join(', ')}`
+			);
+		}
+		if (rejectedEmpty.length) {
+			errors.push(
+				`Empty file${rejectedEmpty.length === 1 ? '' : 's'} skipped: ${rejectedEmpty.join(', ')}`
+			);
+		}
+		attachmentError = errors.join(' · ');
 		input.value = '';
 	}
 
@@ -317,9 +511,56 @@
 		setTimeout(() => { copiedId = null; }, 2000);
 	}
 
+	// Builds the `messages` array for the /api/chat body.
+	//
+	// Flat string content for messages with text-only or no attachments —
+	// keeps the existing provider routes (and the Gemini transformer at
+	// /api/providers/gemini) on their fast path. Switches to OpenAI-shape
+	// content blocks (`[{type:'text'}, {type:'image_url'}]`) the moment any
+	// message in the request carries an ImageAttachment so vision models
+	// receive the image. Provider routes that already accept OpenAI shape
+	// (OpenRouter, Mistral, Groq, OpenAI) pass these through unchanged; the
+	// Gemini route's transformer maps each block to a Gemini Part.
+	async function buildMessagesPayload(
+		all: Message[],
+		excludeId: string
+	): Promise<Array<{ role: 'user' | 'assistant'; content: string | LLMContentBlock[] }>> {
+		const filtered = all.filter((m) => m.id !== excludeId && !m.isError);
+		return Promise.all(
+			filtered.map(async (m) => {
+				const textParts = m.attachments?.filter(
+					(a): a is TextAttachment => a.kind === 'text'
+				);
+				const imageParts = m.attachments?.filter(
+					(a): a is ImageAttachment => a.kind === 'image'
+				);
+				const textContent =
+					textParts && textParts.length
+						? `${m.content}\n\n${attachmentsToMarkdown(textParts)}`
+						: m.content;
+				if (!imageParts || imageParts.length === 0) {
+					return { role: m.role, content: textContent };
+				}
+				// Mint a fresh signed URL per send. They're 1-hour-valid which
+				// is plenty for the round-trip; in-memory cache in
+				// image-storage.ts dedupes if multiple messages reference the
+				// same image (rare but possible on regenerate flows).
+				const blocks: LLMContentBlock[] = [{ type: 'text', text: textContent }];
+				for (const img of imageParts) {
+					const url = await getSignedImageUrl(img.storagePath);
+					if (url) blocks.push({ type: 'image_url', image_url: { url } });
+				}
+				return { role: m.role, content: blocks };
+			})
+		);
+	}
+
 	async function handleSend(directText?: string) {
 		const text = (directText ?? input).trim();
 		if (!text || loading) return;
+		// Defensive: the inline warning + disabled Send button cover this in
+		// the UI, but guard against Enter-key submits or stale state.
+		if (overImageCap) return;
 
 		// Lock the send button up front — both file extraction and the
 		// chat-row insert below are async, and we don't want a double-send
@@ -331,73 +572,65 @@
 		// user wasn't attaching anything new.
 		attachmentError = '';
 
-		// Extract attached files BEFORE creating the chat row so a parse
-		// error doesn't leave an empty chat hanging around. PDFs go through
-		// PDF.js (lazy-loaded), text/code files through File.text(). The
-		// extracted text is appended to the user's message as fenced code
-		// blocks — universal across every provider, no per-provider native
-		// PDF/vision plumbing needed for the common case.
-		let extractedAttachments: ExtractedFile[] = [];
-		if (attachedFiles.length > 0) {
-			// Total-size guard so a user can't pin 250 MB across many files
-			// into a single LLM call. Per-file MAX_FILE_BYTES is enforced
-			// inside extractFile too — this catches the cumulative case.
-			const totalBytes = attachedFiles.reduce((s, f) => s + f.size, 0);
-			if (totalBytes > MAX_TOTAL_BYTES) {
-				const mb = (totalBytes / 1024 / 1024).toFixed(1);
-				const limit = (MAX_TOTAL_BYTES / 1024 / 1024).toFixed(0);
-				attachmentError = `Attachments total ${mb} MB; combined limit is ${limit} MB.`;
-				loading = false;
-				return;
-			}
+		// Split staged files into text/PDF (extracted client-side, embedded
+		// in the LLM string content) vs images (uploaded to Supabase Storage,
+		// referenced by signed URL as an OpenAI-shape image_url block). The
+		// two paths are mostly independent — only the cumulative size check
+		// and the chip render know about both.
+		const textFiles = attachedFiles.filter((f) => !isImageFile(f));
+		const imageFiles = attachedFiles.filter((f) => isImageFile(f));
 
+		// Total-size guard so a user can't pin 250 MB across many files into
+		// a single send. Per-file MAX_FILE_BYTES is enforced both in
+		// extractFile (text) and at the bucket level (images).
+		const totalBytes = attachedFiles.reduce((s, f) => s + f.size, 0);
+		if (totalBytes > MAX_TOTAL_BYTES) {
+			const mb = (totalBytes / 1024 / 1024).toFixed(1);
+			const limit = (MAX_TOTAL_BYTES / 1024 / 1024).toFixed(0);
+			attachmentError = `Attachments total ${mb} MB; combined limit is ${limit} MB.`;
+			loading = false;
+			return;
+		}
+
+		// Extract attached text/PDF files BEFORE creating the chat row so a
+		// parse error doesn't leave an empty chat hanging around. PDFs go
+		// through PDF.js (lazy-loaded), text/code files through File.text().
+		// The extracted text is appended to the user's message as fenced code
+		// blocks — universal across every provider, no per-provider plumbing.
+		let extractedAttachments: ExtractedFile[] = [];
+		const textFailed: string[] = [];
+		if (textFiles.length > 0) {
 			isExtracting = true;
 			// allSettled (not all): if one PDF is corrupt or an unrecognized
-			// file slips past the picker filter, salvage the rest instead
-			// of dumping the whole batch. Failures surface as a one-line
-			// warning while the successes go through. try/finally so an
-			// unexpected synchronous throw in extractFile (shouldn't happen,
-			// but defensive) still releases the pill.
+			// file slips past the picker filter, salvage the rest. Failures
+			// surface as a one-line warning while the successes go through.
 			let results: PromiseSettledResult<ExtractedFile>[];
 			try {
-				results = await Promise.allSettled(attachedFiles.map(extractFile));
+				results = await Promise.allSettled(textFiles.map(extractFile));
 			} finally {
 				isExtracting = false;
 			}
-			const failed: string[] = [];
 			for (let i = 0; i < results.length; i++) {
 				const r = results[i];
 				if (r.status === 'fulfilled') {
 					extractedAttachments.push(r.value);
 				} else {
 					const reason = r.reason instanceof Error ? r.reason.message : 'Failed to read file';
-					failed.push(`${attachedFiles[i].name}: ${reason}`);
+					textFailed.push(`${textFiles[i].name}: ${reason}`);
 				}
 			}
-			if (failed.length > 0 && extractedAttachments.length === 0) {
-				attachmentError = failed.join(' · ');
+			if (textFailed.length > 0 && extractedAttachments.length === 0 && imageFiles.length === 0) {
+				attachmentError = textFailed.join(' · ');
 				loading = false;
 				return;
 			}
-			// PDF.js extracts very little from scanned / image-only PDFs.
-			// Surface a soft heads-up so the user knows why the model's
-			// answer might be vague — not a hard block.
-			const scanned = extractedAttachments.filter(looksLikeScannedPdf);
-			const warnings: string[] = [];
-			if (failed.length > 0) warnings.push(`Skipped: ${failed.join(', ')}`);
-			if (scanned.length > 0) {
-				warnings.push(
-					`${scanned.map((f) => f.name).join(', ')} looked like scanned PDF${scanned.length === 1 ? '' : 's'} — extracted text may be sparse.`
-				);
-			}
-			attachmentError = warnings.join(' · ');
 		}
+
 		// Persisted attachment shape — drops the `language` hint (re-derivable
-		// from the filename via attachmentsToMarkdown when replaying), and is
-		// what the LLM payload + chip UI will read from now on. Text/PDF
-		// content lives here, NOT in message.content, so the user's bubble
-		// stays clean while the model still gets the full context.
-		const persistedAttachments = extractedAttachments.map((a) => ({
+		// from the filename via attachmentsToMarkdown when replaying), tags
+		// each entry with `kind: 'text'` for the discriminated union.
+		const persistedTextAttachments: TextAttachment[] = extractedAttachments.map((a) => ({
+			kind: 'text',
 			name: a.name,
 			mimeType: a.mimeType,
 			pageCount: a.pageCount,
@@ -407,7 +640,8 @@
 		// Temp mode: skip every persistence step. Messages live only in
 		// chatStore.messages (in-memory), no chat row created, no sidebar
 		// entry, no DB write, no localStorage. Refresh clears everything.
-		// Create chat on first message (skipped in temp mode).
+		// Create chat on first message (skipped in temp mode). We need the
+		// chatId BEFORE image upload because Storage paths embed it.
 		let currentChatId: string | undefined;
 		let isNewChat = false;
 		if (!tempChatEnabled) {
@@ -418,16 +652,87 @@
 					isNewChat = true;
 				} catch (err) {
 					console.error('Failed to create chat:', err);
+					loading = false;
 					return;
 				}
 			}
 		}
 
+		// Pre-allocate the user message id so it can be embedded in image
+		// Storage paths (<userId>/<chatId>/<userMsgId>/<filename>). Reused
+		// for the final userMsg object below — the id stays consistent end
+		// to end so DB rows and Storage objects line up.
+		const userMsgId = crypto.randomUUID();
+
+		// Upload images to Storage. handleFileSelect already gated this on
+		// vision/auth/temp, but we re-check defensively in case state shifted
+		// between picker and send (model swap, sign-out, temp toggle).
+		const persistedImageAttachments: ImageAttachment[] = [];
+		const imageFailed: string[] = [];
+		if (imageFiles.length > 0) {
+			if (!authStore.user || !currentChatId || tempChatEnabled) {
+				attachmentError =
+					'Image attachments require sign-in and a saved chat. Switch off temporary mode or sign in.';
+				loading = false;
+				return;
+			}
+			const userId = authStore.user.id;
+			isExtracting = true;
+			try {
+				const results = await Promise.allSettled(
+					imageFiles.map((f, i) => uploadImageToStorage(f, userId, currentChatId!, userMsgId, i))
+				);
+				for (let i = 0; i < results.length; i++) {
+					const r = results[i];
+					const file = imageFiles[i];
+					if (r.status === 'fulfilled') {
+						persistedImageAttachments.push({
+							kind: 'image',
+							name: file.name,
+							mimeType: file.type || 'image/png',
+							storagePath: r.value.storagePath,
+						});
+					} else {
+						const reason =
+							r.reason instanceof Error ? r.reason.message : 'Upload failed';
+						imageFailed.push(`${file.name}: ${reason}`);
+					}
+				}
+			} finally {
+				isExtracting = false;
+			}
+			if (
+				imageFailed.length > 0 &&
+				persistedImageAttachments.length === 0 &&
+				extractedAttachments.length === 0
+			) {
+				attachmentError = imageFailed.join(' · ');
+				loading = false;
+				return;
+			}
+		}
+
+		// Surface soft warnings (partial failures + scanned-PDF heads-up).
+		// Renders as a single line under the composer; persists past send so
+		// the user can read it (cleared at the top of the next handleSend).
+		const scanned = extractedAttachments.filter(looksLikeScannedPdf);
+		const warnings: string[] = [];
+		if (textFailed.length > 0) warnings.push(`Skipped: ${textFailed.join(', ')}`);
+		if (imageFailed.length > 0) warnings.push(`Image upload failed: ${imageFailed.join(', ')}`);
+		if (scanned.length > 0) {
+			warnings.push(
+				`${scanned.map((f) => f.name).join(', ')} looked like scanned PDF${scanned.length === 1 ? '' : 's'} — extracted text may be sparse.`
+			);
+		}
+		attachmentError = warnings.join(' · ');
+
+		const allAttachments = [...persistedTextAttachments, ...persistedImageAttachments];
+
 		const userMsg: Message = {
-			id: crypto.randomUUID(),
+			id: userMsgId,
 			role: 'user',
 			content: text,
-			...(persistedAttachments.length ? { attachments: persistedAttachments } : {}),
+			...(allAttachments.length ? { attachments: allAttachments } : {}),
 		};
 		chatStore.pushMessage(userMsg);
 		input = '';
@@ -477,18 +782,7 @@
 				body: JSON.stringify({
 					companyId: selectedModel.companyId,
 					modelId: selectedModel.modelId,
-					messages: messages
-						.filter((m) => m.id !== assistantMsg.id && !m.isError)
-						.map((m) => ({
-							role: m.role,
-							// Attachments are stored separately on the Message so
-							// the bubble can render clean; fold them back into a
-							// single content string for the LLM here. This keeps
-							// every provider on the existing string-content shape.
-							content: m.attachments?.length
-								? `${m.content}\n\n${attachmentsToMarkdown(m.attachments)}`
-								: m.content,
-						})),
+					messages: await buildMessagesPayload(messages, assistantMsg.id),
 					...(showEffortPicker && thinkingActive && { thinking: true, effort }),
 					...(webSearchEnabled && { webSearch: true }),
 					// In temp mode we omit chatId/messageId so the server-side
@@ -639,8 +933,10 @@
 							class="flex size-9 items-center justify-center rounded-lg transition-all active:scale-[0.97]
 								{tempChatEnabled
 									? 'bg-primary/15 text-primary'
-									: 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}"
+									: 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}
+								disabled:cursor-not-allowed disabled:opacity-50"
 							onclick={toggleTempChat}
+							disabled={chatStore.streaming}
 							aria-label="Toggle temporary chat"
 							aria-pressed={tempChatEnabled}
 						>
@@ -818,19 +1114,95 @@
 							     clean message + filenames here, not 50 KB of fenced PDF
 							     text in their own bubble. -->
 							{#if message.attachments?.length}
-								<div class="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
-									{#each message.attachments as a, i (`${i}:${a.name}`)}
-										<div
-											class="flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground"
-										>
-											<PaperclipIcon class="size-3 shrink-0" />
-											<span class="max-w-48 truncate text-foreground">{a.name}</span>
-											{#if a.pageCount}
-												<span class="shrink-0">·&nbsp;{a.pageCount}p</span>
-											{/if}
-										</div>
-									{/each}
-								</div>
+								{@const textAtts = message.attachments.filter(
+									(x): x is TextAttachment => x.kind === 'text'
+								)}
+								{@const imageAtts = message.attachments.filter(
+									(x): x is ImageAttachment => x.kind === 'image'
+								)}
+								<!-- File chips (PDFs / text / code) on their own row first,
+								     then image thumbnails below. Splitting them keeps long
+								     filename pills from wrapping awkwardly between thumbnails. -->
+								{#if textAtts.length}
+									<div class="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1">
+										{#each textAtts as a, i (`t:${i}:${a.name}`)}
+											<div class="inline-flex items-center gap-1 rounded-md bg-muted/70 px-1.5 py-0.5 text-[11px] leading-none">
+												<PaperclipIcon class="size-2.5 shrink-0 text-muted-foreground" />
+												<span class="max-w-32 truncate">{a.name}</span>
+												{#if a.pageCount}
+													<span class="shrink-0 text-muted-foreground">·{a.pageCount}p</span>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{/if}
+								{#if imageAtts.length}
+									<!-- Image attachments: signed URL fetched lazily on render
+									     and cached in image-storage.ts for the rest of the
+									     session. Click opens a centered modal lightbox. -->
+									<div class="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+										{#each imageAtts as a, i (`i:${i}:${a.name}`)}
+											{#await getSignedImageUrl(a.storagePath)}
+												<!-- Pre-URL state: signed URL hasn't returned yet.
+												     Same visual as the byte-loading state below for
+												     a smooth visual handoff once URL arrives. -->
+												<div
+													class="flex size-32 items-center justify-center rounded-md border bg-muted/50"
+													aria-label={`Loading ${a.name}`}
+												>
+													<span
+														class="streaming-spinner !text-muted-foreground"
+														aria-hidden="true"
+													></span>
+												</div>
+											{:then url}
+												{#if url}
+													<button
+														type="button"
+														onclick={() => {
+															openImageLoaded = false;
+															openImage = { url, name: a.name };
+														}}
+														class="relative block size-32 overflow-hidden rounded-md border bg-muted/50 transition-shadow hover:shadow-md"
+														title={a.name}
+													>
+														<!-- Skeleton + spinner stay underneath the <img>;
+														     the IMG fades in once bytes have decoded so the
+														     thumbnail slot never appears empty/blank. -->
+														{#if !imgLoaded[a.storagePath]}
+															<div
+																class="absolute inset-0 flex items-center justify-center bg-muted/50"
+																aria-hidden="true"
+															>
+																<span
+																	class="streaming-spinner !text-muted-foreground"
+																></span>
+															</div>
+														{/if}
+														<img
+															src={url}
+															alt={a.name}
+															class="block size-full object-cover transition-opacity duration-200 {imgLoaded[
+																a.storagePath
+															]
+																? 'opacity-100'
+																: 'opacity-0'}"
+															loading="lazy"
+															onload={() => (imgLoaded[a.storagePath] = true)}
+														/>
+													</button>
+												{:else}
+													<div
+														class="flex items-center gap-1.5 rounded-md border bg-destructive/10 px-2 py-1 text-xs text-destructive"
+													>
+														<PaperclipIcon class="size-3 shrink-0" />
+														<span class="max-w-40 truncate">Failed to load {a.name}</span>
+													</div>
+												{/if}
+											{/await}
+										{/each}
+									</div>
+								{/if}
 							{/if}
 							<div class="mt-2 flex items-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
 								<button
@@ -925,7 +1297,7 @@
 			     the picker filter and the runtime check stay in sync. -->
 			<input
 				type="file"
-				accept={ATTACHMENT_ACCEPT}
+				accept={attachmentAccept}
 				multiple
 				class="hidden"
 				bind:this={fileInputEl}
@@ -962,6 +1334,21 @@
 				>
 					<span class="streaming-spinner" aria-hidden="true"></span>
 					Reading file{attachedFiles.length === 1 ? '' : 's'}…
+				</div>
+			{:else if overImageCap}
+				<!-- User staged N images then switched to a model that supports
+				     fewer. We don't drop attachments silently — Send is disabled
+				     until they remove the extras or switch back. -->
+				<div
+					class="mb-2 rounded-md bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+					role="alert"
+					aria-live="assertive"
+				>
+					{currentModel?.name ?? 'This model'} accepts up to {imageCap} image{imageCap === 1
+						? ''
+						: 's'}
+					per message — you have {stagedImageCount}. Remove {stagedImageCount - imageCap} or
+					switch to a model with a higher limit.
 				</div>
 			{:else if attachmentError}
 				<div
@@ -1043,13 +1430,13 @@
 									     they land. -->
 									<button
 										class="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors
-											{isGuest ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
+											{isGuest || attachDisabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-muted'}"
 										onclick={() => {
-											if (isGuest) return;
+											if (isGuest || attachDisabled) return;
 											toolsOpen = false;
 											openFilePicker();
 										}}
-										disabled={isGuest}
+										disabled={isGuest || attachDisabled}
 									>
 										{#if isGuest}
 											<LockIcon class="size-4 shrink-0 text-muted-foreground" />
@@ -1059,7 +1446,15 @@
 										<div class="flex flex-1 flex-col">
 											<span class="text-sm font-semibold">Attach file</span>
 											<span class="text-xs text-muted-foreground">
-												{isGuest ? 'Sign in to attach files' : 'PDF or text / code'}
+												{isGuest
+													? 'Sign in to attach files'
+													: atFileCap
+														? `Limit reached (${MAX_FILES_PER_MESSAGE} files per message)`
+														: atImageCap
+															? `Image limit reached (${imageCap} per message)`
+															: currentModel?.capabilities.vision
+																? `PDF, text / code, or up to ${imageCap} image${imageCap === 1 ? '' : 's'}`
+																: 'PDF or text / code'}
 											</span>
 										</div>
 										{#if !isGuest && attachedFiles.length > 0}
@@ -1217,12 +1612,18 @@
 										: 'text-muted-foreground hover:bg-muted hover:text-foreground'}
 								disabled:cursor-not-allowed disabled:opacity-60"
 							onclick={isGuest ? undefined : openFilePicker}
-							disabled={isGuest || isExtracting}
+							disabled={isGuest || isExtracting || attachDisabled}
 							title={isGuest
 								? 'Sign in to attach files'
 								: isExtracting
 									? 'Reading attached files…'
-									: 'Attach PDF or text / code'}
+									: atFileCap
+										? `Up to ${MAX_FILES_PER_MESSAGE} files per message — remove one to add more`
+										: atImageCap
+											? `${currentModel?.name ?? 'This model'} accepts up to ${imageCap} image${imageCap === 1 ? '' : 's'} per message — remove one to add more`
+											: currentModel?.capabilities.vision
+												? `Attach PDF, text / code, or images (up to ${imageCap} image${imageCap === 1 ? '' : 's'})`
+												: 'Attach PDF or text / code'}
 						>
 							{#if isGuest}
 								<LockIcon class="size-4" />
@@ -1263,7 +1664,7 @@
 					size="icon"
 					class="size-11 shrink-0 rounded-xl"
 					onclick={() => handleSend()}
-					disabled={!input.trim() || loading}
+					disabled={!input.trim() || loading || overImageCap}
 				>
 					<ArrowUpIcon class="size-5" />
 				</Button>
@@ -1271,6 +1672,87 @@
 		</div>
 	</div>
 </div>
+
+<!-- Image lightbox: hand-rolled overlay because shadcn Dialog.Content's
+     default classes (sm:max-w-sm + grid + p-4 + ring) kept fighting the
+     centering overrides. Plain flex container is simpler and guaranteed
+     centered. Svelte fade/scale transitions are GPU-composited (opacity
+     + transform) so they stay at 60 FPS. -->
+{#if openImage}
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+		role="dialog"
+		aria-modal="true"
+		aria-label={openImage.name}
+		transition:fade={{ duration: 120 }}
+		onclick={() => {
+				openImage = null;
+				openImageLoaded = false;
+			}}
+		onkeydown={(e) => {
+			if (e.key === 'Escape') {
+				openImage = null;
+				openImageLoaded = false;
+			}
+		}}
+		tabindex="-1"
+	>
+		<div
+			class="relative"
+			transition:scale={{ duration: 150, start: 0.94 }}
+			onclick={(e) => e.stopPropagation()}
+			role="presentation"
+		>
+			<!-- Loader sits behind the image until the full-resolution bytes
+			     decode. Sized to the same min footprint the image will occupy
+			     so layout doesn't snap when the picture finishes loading. -->
+			{#if !openImageLoaded}
+				<div
+					class="flex h-64 w-64 items-center justify-center rounded-lg bg-background/10 backdrop-blur-sm"
+					aria-label="Loading image"
+				>
+					<span class="streaming-spinner !h-8 !w-8 !border-[3px] !text-white" aria-hidden="true"
+					></span>
+				</div>
+			{/if}
+			<img
+				src={openImage.url}
+				alt={openImage.name}
+				class="block h-auto max-h-[75vh] w-auto max-w-[75vw] rounded-lg shadow-2xl transition-opacity duration-200 {openImageLoaded
+					? 'opacity-100'
+					: 'pointer-events-none absolute inset-0 opacity-0'}"
+				draggable="false"
+				onload={() => (openImageLoaded = true)}
+			/>
+			<!-- Download + close buttons anchored to the image's top-right.
+			     Solid background + ring + backdrop-blur keeps them readable
+			     against any image content. -->
+			<div class="absolute top-2 right-2 flex items-center gap-2">
+				<button
+					type="button"
+					class="flex size-9 items-center justify-center rounded-full bg-background/90 text-foreground shadow-lg ring-1 ring-border backdrop-blur-sm transition-colors hover:bg-background"
+					aria-label="Download image"
+					title="Download"
+					onclick={downloadOpenImage}
+				>
+					<DownloadIcon class="size-4" />
+				</button>
+				<button
+					type="button"
+					class="flex size-9 items-center justify-center rounded-full bg-background/90 text-foreground shadow-lg ring-1 ring-border backdrop-blur-sm transition-colors hover:bg-background"
+					aria-label="Close image"
+					title="Close"
+					onclick={() => {
+				openImage = null;
+				openImageLoaded = false;
+			}}
+				>
+					<XIcon class="size-4" />
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <style>
 	/* Streaming "Generating" spinner — uses the global `md-spin` keyframe

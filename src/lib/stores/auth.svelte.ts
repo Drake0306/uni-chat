@@ -1,6 +1,7 @@
 import { supabase } from '$lib/supabase.js';
 import { colorsStore } from './colors.svelte.js';
 import { codeBlockSettings } from './code-block-settings.svelte.js';
+import { clearSignedUrlCache } from '$lib/image-storage.js';
 import type { User, Session } from '@supabase/supabase-js';
 
 let user = $state<User | null>(null);
@@ -109,6 +110,10 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 		}
 		_wasAuthenticated = false;
 		_userInitiatedSignOut = false;
+		// Drop in-memory signed-URL cache so a different user signing into
+		// the same tab can't fetch the previous user's images via still-valid
+		// signed URLs (Supabase signed URLs are time-locked, not session-locked).
+		clearSignedUrlCache();
 	}
 });
 

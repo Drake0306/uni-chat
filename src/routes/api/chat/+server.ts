@@ -5,9 +5,44 @@ import { checkRateLimit, type Tier } from '$lib/server/rate-limit.js';
 import { getAuthUser, getServiceClient } from '$lib/server/supabase.js';
 import { accumulateAndSave } from '$lib/server/stream-persist.js';
 import { searchWeb, formatSearchContext } from '$lib/server/web-search.js';
+import type { LLMContentBlock } from '$lib/types.js';
 import type { RequestHandler } from './$types';
 
-type ChatMessage = { role: string; content: string };
+// Content can be a flat string (text-only messages, fast path) OR an
+// OpenAI-shape content block array when the message carries images. The
+// per-provider routes handle both shapes — we forward whichever was
+// received without flattening, except for web-search injection below
+// (which needs the typed text and patches it back into the right block).
+type ChatMessage = { role: string; content: string | LLMContentBlock[] };
+
+// Pull the typed text out of either content shape for use as the search
+// query / persistence target.
+function extractText(content: string | LLMContentBlock[]): string {
+	if (typeof content === 'string') return content;
+	return content
+		.filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+		.map((b) => b.text)
+		.join('\n\n');
+}
+
+// Replaces the first text block (or the whole string content) with new
+// text. Image blocks are preserved untouched. Used to inject web-search
+// results into the user's last message without losing any attached images.
+function withReplacedText(
+	content: string | LLMContentBlock[],
+	newText: string
+): string | LLMContentBlock[] {
+	if (typeof content === 'string') return newText;
+	let replaced = false;
+	const out = content.map((b) => {
+		if (!replaced && b.type === 'text') {
+			replaced = true;
+			return { type: 'text', text: newText } as const;
+		}
+		return b;
+	});
+	return replaced ? out : ([{ type: 'text', text: newText }, ...out] as LLMContentBlock[]);
+}
 
 export const POST: RequestHandler = async ({ request, fetch }) => {
 	const body = await request.json();
@@ -106,12 +141,13 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 			return -1;
 		})();
 		const lastUser = lastIdx >= 0 ? messages[lastIdx] : null;
-		if (lastUser?.content) {
-			const results = await searchWeb(lastUser.content);
+		const queryText = lastUser ? extractText(lastUser.content) : '';
+		if (queryText) {
+			const results = await searchWeb(queryText);
 			if (results) {
-				const augmented = formatSearchContext(results, lastUser.content);
+				const augmented = formatSearchContext(results, queryText);
 				outboundMessages = messages.map((m: ChatMessage, i: number) =>
-					i === lastIdx ? { ...m, content: augmented } : m
+					i === lastIdx ? { ...m, content: withReplacedText(m.content, augmented) } : m
 				);
 			}
 		}

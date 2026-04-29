@@ -1,6 +1,76 @@
 import { env } from '$env/dynamic/private';
 import { json } from '@sveltejs/kit';
+import type { LLMContentBlock } from '$lib/types.js';
 import type { RequestHandler } from './$types';
+
+type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
+
+// Gemini's inline_data has a ~20 MB hard limit on the request body. Base64
+// encoding inflates raw bytes by 4/3, so the source image must stay under
+// ~15 MB to fit. Anything larger is dropped with a console warn — the rest
+// of the message still goes through. Our app-level cap is 25 MB per file
+// (file-extract.ts MAX_FILE_BYTES); the gap is intentional so non-Gemini
+// providers (which fetch URLs themselves) aren't artificially restricted.
+const GEMINI_MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+
+// Pull text out of a possibly-array content. Used for the system message
+// where we always want a flat string.
+function extractText(content: string | LLMContentBlock[]): string {
+	if (typeof content === 'string') return content;
+	return content
+		.filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+		.map((b) => b.text)
+		.join('\n\n');
+}
+
+// Fetch each image_url block server-side, base64-encode, emit it as
+// Gemini's inline_data part. On fetch failure (signed URL expired, RLS
+// blocked, network), skip the image with a warn — better to send the
+// model the rest of the conversation than to fail the whole request.
+async function blockToParts(block: LLMContentBlock): Promise<Part[]> {
+	if (block.type === 'text') return [{ text: block.text }];
+	try {
+		const res = await fetch(block.image_url.url);
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		// Pre-check via Content-Length to avoid pulling a 25 MB body just to
+		// reject it after the fact. Servers don't always set this header
+		// (HEAD-only metadata, transfer-encoding: chunked); when missing we
+		// still cap on the actual buffer size below.
+		const cl = parseInt(res.headers.get('content-length') ?? '0', 10);
+		if (cl > GEMINI_MAX_IMAGE_BYTES) {
+			console.warn(
+				`[api/providers/gemini] Image ${cl} bytes exceeds Gemini inline limit (${GEMINI_MAX_IMAGE_BYTES}); skipping`
+			);
+			return [];
+		}
+		const buf = await res.arrayBuffer();
+		if (buf.byteLength > GEMINI_MAX_IMAGE_BYTES) {
+			console.warn(
+				`[api/providers/gemini] Image actual size ${buf.byteLength} exceeds limit; skipping`
+			);
+			return [];
+		}
+		const data = Buffer.from(buf).toString('base64');
+		const mimeType =
+			(res.headers.get('content-type') ?? '').split(';')[0].trim() || 'image/png';
+		return [{ inline_data: { mime_type: mimeType, data } }];
+	} catch (err) {
+		console.warn('[api/providers/gemini] Image fetch failed:', err);
+		return [];
+	}
+}
+
+async function buildParts(content: string | LLMContentBlock[]): Promise<Part[]> {
+	if (typeof content === 'string') return [{ text: content }];
+	const out: Part[] = [];
+	for (const block of content) {
+		const parts = await blockToParts(block);
+		out.push(...parts);
+	}
+	// Gemini rejects empty parts arrays — fall back to an empty text part if
+	// every block was an image and they all failed.
+	return out.length > 0 ? out : [{ text: '' }];
+}
 
 export const POST: RequestHandler = async ({ request }) => {
 	const apiKey = env.GEMINI_API_KEY;
@@ -10,21 +80,24 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const body = await request.json();
 
-	// Convert OpenAI-style messages to Gemini format
-	const contents = body.messages.map((msg: { role: string; content: string }) => ({
-		role: msg.role === 'assistant' ? 'model' : 'user',
-		parts: [{ text: msg.content }],
-	}));
+	type Msg = { role: string; content: string | LLMContentBlock[] };
+	const allMessages = body.messages as Msg[];
+	const systemMsg = allMessages.find((m) => m.role === 'system');
+	const nonSystemMessages = allMessages.filter((m) => m.role !== 'system');
 
-	// Extract system message if present
-	const systemMsg = body.messages.find((m: { role: string }) => m.role === 'system');
-	const nonSystemContents = contents.filter((_: unknown, i: number) => body.messages[i].role !== 'system');
+	// Convert OpenAI-style messages to Gemini contents. Async because the
+	// image_url → inline_data path fetches each URL server-side and
+	// base64-encodes the bytes.
+	const contents = await Promise.all(
+		nonSystemMessages.map(async (msg) => ({
+			role: msg.role === 'assistant' ? 'model' : 'user',
+			parts: await buildParts(msg.content),
+		}))
+	);
 
-	const geminiBody: Record<string, unknown> = {
-		contents: nonSystemContents,
-	};
+	const geminiBody: Record<string, unknown> = { contents };
 	if (systemMsg) {
-		geminiBody.systemInstruction = { parts: [{ text: systemMsg.content }] };
+		geminiBody.systemInstruction = { parts: [{ text: extractText(systemMsg.content) }] };
 	}
 	if (body.thinking) {
 		// Map effort to a thinking-budget token count. The numbers are
