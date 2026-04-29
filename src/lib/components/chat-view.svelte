@@ -71,6 +71,29 @@
 
 	const sidebar = useSidebar();
 
+	// Global keyboard shortcuts mirrored on the quick-commands rail.
+	// Bindings (literal Control key, NOT Cmd):
+	//   Ctrl+N → new chat
+	//   Ctrl+B → toggle sidebar
+	// On Mac, Ctrl is largely unreserved by browsers, so Ctrl+N actually
+	// reaches the page (Cmd+N would be eaten by Chrome). Search (Ctrl+K)
+	// stays in app-sidebar — its handler already accepts both modifiers,
+	// so users on either platform can trigger it. Bound via
+	// <svelte:window> for Svelte-managed lifecycle. e.code is checked first
+	// (layout-independent) with a lowercased e.key fallback.
+	function handleGlobalKey(e: KeyboardEvent) {
+		if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+		const isN = e.code === 'KeyN' || e.key?.toLowerCase() === 'n';
+		const isB = e.code === 'KeyB' || e.key?.toLowerCase() === 'b';
+		if (isN) {
+			e.preventDefault();
+			goto('/');
+		} else if (isB) {
+			e.preventDefault();
+			sidebar.toggle();
+		}
+	}
+
 	let tempChatEnabled = $state(false);
 
 	// Switching temp mode in either direction resets the in-memory chat: temp
@@ -466,6 +489,8 @@
 	}
 </script>
 
+<svelte:window onkeydown={handleGlobalKey} />
+
 <div class="flex h-dvh flex-col sm:h-svh">
 	<!-- Floating toolbar (slides in from left when sidebar hides). On mobile
 	     it must always be visible — the desktop sidebar is collapsed off-canvas
@@ -576,6 +601,73 @@
 					</div>
 				</Popover.Content>
 			</Popover.Root>
+		</div>
+	</div>
+
+	<!-- Right-side vertical quick-commands rail. Desktop only; mobile users
+	     have the floating-toolbar-left for sidebar/search/new-chat. Each
+	     button shows just the keyboard shortcut chip; the action label
+	     surfaces in a tooltip on hover. Sits just below the temp-chat /
+	     settings strip above. -->
+	<div
+		class="floating-toolbar-quick absolute right-3 top-16 z-20 hidden sm:block"
+	>
+		<div
+			class="flex flex-col gap-0.5 rounded-xl bg-sidebar p-1 shadow-md ring-1 ring-sidebar-border"
+		>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="flex h-9 items-center justify-center rounded-md px-2.5 font-mono text-sm font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97]"
+							onclick={() => goto('/')}
+							aria-label="New chat"
+						>
+							Ctrl+N
+						</button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content side="left" sideOffset={6}>
+					<p class="font-semibold">New chat</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="flex h-9 items-center justify-center rounded-md px-2.5 font-mono text-sm font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97]"
+							onclick={() => (commandStore.open = true)}
+							aria-label="Search"
+						>
+							Ctrl+K
+						</button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content side="left" sideOffset={6}>
+					<p class="font-semibold">Search</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="flex h-9 items-center justify-center rounded-md px-2.5 font-mono text-sm font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground active:scale-[0.97]"
+							onclick={() => sidebar.toggle()}
+							aria-label={sidebar.open ? 'Hide sidebar' : 'Show sidebar'}
+						>
+							Ctrl+B
+						</button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content side="left" sideOffset={6}>
+					<p class="font-semibold">{sidebar.open ? 'Hide sidebar' : 'Show sidebar'}</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
 		</div>
 	</div>
 
