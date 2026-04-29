@@ -15,6 +15,8 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import SettingsModelsTab from '$lib/components/settings-models-tab.svelte';
 	import { authStore } from '$lib/stores/auth.svelte.js';
+	import { colorsStore } from '$lib/stores/colors.svelte.js';
+	import { codeBlockSettings } from '$lib/stores/code-block-settings.svelte.js';
 
 	// ── Active tab — read from URL query (?tab=...) ─────────
 	type TabId =
@@ -364,6 +366,21 @@
 			<div class="divide-y">
 				<div class="flex items-start justify-between gap-6 py-5">
 					<div class="min-w-0">
+						<p class="font-semibold">Default Colors</p>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Revert to the standard theme — turn off the cream background and
+							yellow accent across both light and dark modes. Synced to your
+							account so the choice follows you across devices.
+						</p>
+					</div>
+					<Switch
+						checked={colorsStore.useDefaultColors}
+						onCheckedChange={(v) => colorsStore.set(v, authStore.user?.id ?? null)}
+						aria-label="Use default colors"
+					/>
+				</div>
+				<div class="flex items-start justify-between gap-6 py-5">
+					<div class="min-w-0">
 						<p class="font-semibold">Boring Theme</p>
 						<p class="mt-1 text-sm text-muted-foreground">
 							If you think the pink is too much, turn this on to tone it down.
@@ -468,6 +485,54 @@
 &rbrace;</code></pre>
 						</div>
 					</div>
+				</div>
+			</div>
+		</section>
+		<!-- ── Code Blocks ────────────────────────────────── -->
+		<section>
+			<h2 class="mb-2 text-2xl font-bold">Code Blocks</h2>
+			<div class="divide-y">
+				<div class="flex items-start justify-between gap-6 py-5">
+					<div class="min-w-0">
+						<p class="font-semibold">Auto-collapse long code blocks</p>
+						<p class="mt-1 text-sm text-muted-foreground">
+							When on, code blocks longer than the line limit below collapse on
+							load. Streaming responses always stay expanded so you can watch the
+							model write — collapse only kicks in once the message is finished.
+							Turn this off to keep every code block expanded by default.
+						</p>
+					</div>
+					<Switch
+						checked={codeBlockSettings.autoCollapse}
+						onCheckedChange={(v) =>
+							codeBlockSettings.setAutoCollapse(v, authStore.user?.id ?? null)}
+						aria-label="Auto-collapse long code blocks"
+					/>
+				</div>
+				<div class="flex items-start justify-between gap-6 py-5">
+					<div class="min-w-0">
+						<p class="font-semibold">Collapse after this many lines</p>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Code blocks with more lines than this collapse on load. Has no
+							effect when auto-collapse is off. Default is 10.
+						</p>
+					</div>
+					<input
+						type="number"
+						min="1"
+						max="1000"
+						step="1"
+						value={codeBlockSettings.collapseLines}
+						disabled={!codeBlockSettings.autoCollapse}
+						oninput={(e) => {
+							const n = parseInt((e.target as HTMLInputElement).value, 10);
+							if (Number.isFinite(n)) {
+								codeBlockSettings.setCollapseLines(n, authStore.user?.id ?? null);
+							}
+						}}
+						class="h-10 w-24 shrink-0 rounded-lg border bg-background px-3 text-sm text-foreground outline-none transition-colors focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+						aria-label="Collapse after this many lines"
+					/>
 				</div>
 			</div>
 		</section>

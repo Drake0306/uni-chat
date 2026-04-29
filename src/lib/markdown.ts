@@ -45,9 +45,31 @@ function getHighlighter() {
 	return highlighterPromise;
 }
 
-const AUTO_COLLAPSE_THRESHOLD = 10;
+export interface RenderOptions {
+	// Master switch for auto-collapse. When false, code blocks always render
+	// expanded regardless of length (the user can still toggle individual
+	// blocks via the Expand / Collapse button).
+	autoCollapse?: boolean;
+	// Auto-collapse threshold. Code blocks with more than this many lines
+	// collapse on initial render. Ignored when autoCollapse is false.
+	collapseLines?: number;
+	// True while the message is still streaming. The renderer adds a small
+	// pulsing "Generating" indicator to the header of every collapsed code
+	// block so the user knows the model is still writing inside an accordion
+	// they can't see. The indicator only appears while collapsed AND
+	// streaming — expanded blocks show the code being typed live, no
+	// indicator needed.
+	streaming?: boolean;
+}
 
-export async function renderMarkdown(text: string): Promise<string> {
+const DEFAULT_OPTIONS: Required<RenderOptions> = {
+	autoCollapse: true,
+	collapseLines: 10,
+	streaming: false,
+};
+
+export async function renderMarkdown(text: string, opts: RenderOptions = {}): Promise<string> {
+	const o = { ...DEFAULT_OPTIONS, ...opts };
 	const [processor, highlighter] = await Promise.all([getProcessor(), getHighlighter()]);
 
 	const file = await processor.process(text);
@@ -62,8 +84,9 @@ export async function renderMarkdown(text: string): Promise<string> {
 		const highlighted = highlighter.codeToHtml(decoded, {
 			lang: language,
 			themes: { light: 'github-light', dark: 'github-dark' },
+			defaultColor: false,
 		});
-		return wrapCodeBlock(highlighted, lang, decoded);
+		return wrapCodeBlock(highlighted, lang, decoded, o);
 	});
 
 	// Replace plain code blocks (no language)
@@ -73,8 +96,9 @@ export async function renderMarkdown(text: string): Promise<string> {
 		const highlighted = highlighter.codeToHtml(decoded, {
 			lang: 'plaintext',
 			themes: { light: 'github-light', dark: 'github-dark' },
+			defaultColor: false,
 		});
-		return wrapCodeBlock(highlighted, 'code', decoded);
+		return wrapCodeBlock(highlighted, 'code', decoded, o);
 	});
 
 	// Wrap tables with a copy container
@@ -86,20 +110,30 @@ export async function renderMarkdown(text: string): Promise<string> {
 	return html;
 }
 
-function wrapCodeBlock(highlighted: string, lang: string, rawCode: string): string {
+function wrapCodeBlock(
+	highlighted: string,
+	lang: string,
+	rawCode: string,
+	opts: Required<RenderOptions>
+): string {
 	const lineCount = rawCode.split('\n').length;
-	const collapsed = lineCount > AUTO_COLLAPSE_THRESHOLD;
+	const shouldAutoCollapse = opts.autoCollapse && lineCount > opts.collapseLines;
 	const escapedCode = rawCode
 		.replace(/&/g, '&amp;')
 		.replace(/"/g, '&quot;')
 		.replace(/</g, '&lt;')
 		.replace(/>/g, '&gt;');
 
-	return `<div class="md-code-wrap${collapsed ? ' md-collapsed' : ''}">
+	// The "Generating" loader pill appears via CSS pseudo-elements when an
+	// ancestor carries .streaming-active AND this block is .md-collapsed.
+	// chat-view.svelte adds the class to the in-flight assistant message
+	// wrapper so we don't have to inject markup that depends on a stale
+	// streaming flag captured at render time. See markdown-renderer.svelte.
+	return `<div class="md-code-wrap${shouldAutoCollapse ? ' md-collapsed' : ''}">
 <div class="md-code-header">
 <span class="md-code-lang">${lang}</span>
 <div class="md-code-actions">
-<button class="md-code-toggle" data-toggle>${collapsed ? '&#9654; Expand' : '&#9660; Collapse'}</button>
+<button class="md-code-toggle" data-toggle>${shouldAutoCollapse ? '&#9654; Expand' : '&#9660; Collapse'}</button>
 <button class="md-code-copy" data-copy data-code="${escapedCode}">Copy</button>
 </div>
 </div>

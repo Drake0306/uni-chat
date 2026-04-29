@@ -249,8 +249,8 @@
 								<button
 									class="shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold transition-all sm:px-3.5
 										{isActive
-										? 'border border-border bg-card text-foreground shadow-sm'
-										: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+										? 'bg-primary text-primary-foreground shadow-sm'
+										: 'text-muted-foreground hover:bg-primary/15 hover:text-foreground'}"
 									onclick={() => goToTab(tab.id)}
 								>
 									{tab.label}

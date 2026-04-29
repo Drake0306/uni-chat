@@ -1,4 +1,6 @@
 import { supabase } from '$lib/supabase.js';
+import { colorsStore } from './colors.svelte.js';
+import { codeBlockSettings } from './code-block-settings.svelte.js';
 import type { User, Session } from '@supabase/supabase-js';
 
 let user = $state<User | null>(null);
@@ -46,7 +48,9 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 		// Fire-and-forget — does NOT block the callback
 		supabase
 			.from('profiles')
-			.select('tier, onboarding_dismissed')
+			.select(
+				'tier, onboarding_dismissed, use_default_colors, code_block_auto_collapse, code_block_collapse_lines'
+			)
 			.eq('id', user.id)
 			.single()
 			.then(
@@ -59,6 +63,17 @@ supabase.auth.onAuthStateChange((_event, sess) => {
 						typeof data?.onboarding_dismissed === 'boolean'
 							? data.onboarding_dismissed
 							: true;
+					// DB is the source of truth across devices for the custom-
+					// colors toggle; if it differs from the localStorage cache,
+					// the colors store updates the cache + html class.
+					if (typeof data?.use_default_colors === 'boolean') {
+						colorsStore.syncFromDb(data.use_default_colors);
+					}
+					// Same idea for code-block accordion settings.
+					codeBlockSettings.syncFromDb({
+						autoCollapse: data?.code_block_auto_collapse,
+						collapseLines: data?.code_block_collapse_lines,
+					});
 				},
 				() => {
 					tier = 'free';

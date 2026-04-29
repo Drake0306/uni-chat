@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { renderMarkdown } from '$lib/markdown.js';
+	import { codeBlockSettings } from '$lib/stores/code-block-settings.svelte.js';
 
-	let { content }: { content: string } = $props();
+	let {
+		content,
+		streaming = false,
+	}: { content: string; streaming?: boolean } = $props();
 
 	let html = $state('');
 	let containerEl: HTMLDivElement | undefined = $state();
@@ -19,6 +23,12 @@
 
 	$effect(() => {
 		void content; // track the prop as a dependency
+		// Track the streaming flag and code-block settings so the markdown
+		// re-renders with the right collapse decisions when any of them flip
+		// (e.g., streaming → done, or the user changes the threshold).
+		void streaming;
+		void codeBlockSettings.autoCollapse;
+		void codeBlockSettings.collapseLines;
 		if (!content) {
 			html = '';
 			lastRenderTime = 0;
@@ -35,7 +45,11 @@
 			// overwrite newer ones if a later render finishes first.
 			const myId = ++activeRenderId;
 			try {
-				const result = await renderMarkdown(content);
+				const result = await renderMarkdown(content, {
+					autoCollapse: codeBlockSettings.autoCollapse,
+					collapseLines: codeBlockSettings.collapseLines,
+					streaming,
+				});
 				if (myId === activeRenderId) html = result;
 			} catch (err) {
 				console.warn('[markdown] render failed:', err);
@@ -133,6 +147,36 @@
 		gap: 0.375rem;
 	}
 
+	/* (The streaming "Generating" pill is rendered as a Svelte element in
+	 * chat-view.svelte — outside the {@html} block — so the spinner element
+	 * doesn't get re-created on every throttled markdown re-render. The
+	 * .streaming-active class is still set here so future per-block hooks
+	 * are easy to add, but no per-code-block loader CSS is wired up.) */
+
+	/* Shiki theme switching — Shiki emits both `--shiki-light` and
+	 * `--shiki-dark` CSS variables on every <pre> and <span>. With
+	 * defaultColor:false there's no inline `color` declaration, so picking
+	 * the right variable is purely a CSS concern. Our app uses .dark on
+	 * <html>, not prefers-color-scheme, so the swap rides off that class. */
+	:global(.shiki),
+	:global(.shiki span) {
+		color: var(--shiki-light);
+		background-color: var(--shiki-light-bg);
+	}
+	:global(html.dark .shiki),
+	:global(html.dark .shiki span) {
+		color: var(--shiki-dark);
+		background-color: var(--shiki-dark-bg);
+	}
+	/* Inner spans share their parent's background — only the <pre> needs the
+	 * surface color. Without this every word fragment paints its own bg. */
+	:global(.shiki span) {
+		background-color: transparent;
+	}
+	:global(html.dark .shiki span) {
+		background-color: transparent;
+	}
+
 	:global(.md-code-toggle),
 	:global(.md-code-copy) {
 		font-size: 0.8125rem;
@@ -161,7 +205,13 @@
 	:global(.md-code-body) {
 		overflow: hidden;
 		transition: max-height 0.25s ease, opacity 0.2s ease;
-		max-height: 2000px;
+		/* Effectively no cap — the previous 2000px was clipping long scripts
+		 * (the body was hidden mid-file even though the raw code was intact,
+		 * so Copy worked while the visible block looked truncated). 1,000,000px
+		 * is large enough that no realistic code block hits it; the value only
+		 * exists so the max-height transition has an explicit target to
+		 * animate to/from on collapse. */
+		max-height: 1000000px;
 		opacity: 1;
 	}
 

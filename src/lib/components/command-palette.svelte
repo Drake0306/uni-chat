@@ -3,7 +3,6 @@
 	import { untrack } from 'svelte';
 	import * as Command from '$lib/components/ui/command/index.js';
 	import PinIcon from '@lucide/svelte/icons/pin';
-	import MessageSquareIcon from '@lucide/svelte/icons/message-square';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { chatStore } from '$lib/stores/chats.svelte.js';
 	import { filterActions, type QuickAction } from '$lib/config/quick-actions.js';
@@ -231,7 +230,7 @@
 								class="gap-3 px-3 py-2.5"
 							>
 								<span
-									class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+									class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"
 								>
 									<Icon class="size-4" />
 								</span>
@@ -269,7 +268,7 @@
 								class="gap-3 px-3 py-2.5"
 							>
 								<span
-									class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+									class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"
 								>
 									<PinIcon class="size-4" />
 								</span>
@@ -302,11 +301,6 @@
 									onSelect={() => selectChat(chat)}
 									class="gap-3 px-3 py-2.5"
 								>
-									<span
-										class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
-									>
-										<MessageSquareIcon class="size-4" />
-									</span>
 									<div class="flex min-w-0 flex-1 flex-col">
 										<span class="truncate text-sm font-semibold">
 											{#each splitMatch(chat.title, effectiveQuery) as seg}
@@ -338,7 +332,7 @@
 				{@const Icon = highlightedRow.action.icon}
 				<div class="flex flex-1 flex-col p-6">
 					<span
-						class="mb-4 flex size-12 items-center justify-center rounded-xl bg-muted text-foreground"
+						class="mb-4 flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground"
 					>
 						<Icon class="size-6" />
 					</span>

@@ -415,7 +415,7 @@
 		</div>
 
 		<div class="px-2 pb-1" data-onboarding="new-chat">
-			<Button variant="outline" class="w-full justify-start gap-2 text-sm font-semibold" onclick={newChat}>
+			<Button class="w-full justify-start gap-2 text-sm font-semibold" onclick={newChat}>
 				<PlusIcon class="size-4" />
 				New Chat
 			</Button>

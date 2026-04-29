@@ -9,23 +9,30 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-	--background: oklch(1 0 0);
+	/* Light theme — warm cream + yellow accent palette.
+	 * Page bg is cream; "highlighter" surfaces (cards, popovers, sidebar)
+	 * are white so they pop. Primary/CTA is the brand yellow with dark text
+	 * for contrast. The full custom palette can be reverted at runtime by
+	 * toggling the .use-default-colors class on <html> (driven from the
+	 * Customization tab in /settings). The override block at the bottom of
+	 * this file restores the stock shadcn light-mode values when on. */
+	--background: #f8f6ee;
 	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
+	--card: #ffffff;
 	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
+	--popover: #ffffff;
 	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
+	--primary: #ffde2e;
+	--primary-foreground: #0a0a0a;
+	--secondary: #f1ecda;
 	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
+	--muted: #f1ecda;
 	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
+	--accent: #f1ecda;
 	--accent-foreground: oklch(0.205 0 0);
 	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
+	--border: #e6decb;
+	--input: #e6decb;
 	--ring: oklch(0.708 0 0);
 	--chart-1: oklch(0.87 0 0);
 	--chart-2: oklch(0.556 0 0);
@@ -33,14 +40,20 @@
 	--chart-4: oklch(0.371 0 0);
 	--chart-5: oklch(0.269 0 0);
 	--radius: 0.625rem;
-	--sidebar: oklch(0.985 0 0);
+	--sidebar: #ffffff;
 	--sidebar-foreground: oklch(0.145 0 0);
 	--sidebar-primary: oklch(0.205 0 0);
 	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
+	--sidebar-accent: #f1ecda;
 	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
+	--sidebar-border: #e6decb;
 	--sidebar-ring: oklch(0.708 0 0);
+
+	/* Bound to the composer wrapper so the chat input picks up the brand
+	 * yellow as a soft tint. Defined as a variable (not a Tailwind utility)
+	 * so .use-default-colors can swap it back to the original muted gray
+	 * without touching the markup. */
+	--composer-bg: rgba(255, 222, 46, 0.18);
 }
 
 .dark {
@@ -50,8 +63,11 @@
 	--card-foreground: oklch(0.985 0 0);
 	--popover: oklch(0.205 0 0);
 	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
+	/* Brand yellow as the primary accent. Same hex as light mode so buttons,
+	 * the Send icon, the Pro card border, and any text-primary icons read
+	 * consistently in both themes. Dark text on yellow keeps contrast. */
+	--primary: #ffde2e;
+	--primary-foreground: #0a0a0a;
 	--secondary: oklch(0.269 0 0);
 	--secondary-foreground: oklch(0.985 0 0);
 	--muted: oklch(0.269 0 0);
@@ -75,6 +91,36 @@
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 10%);
 	--sidebar-ring: oklch(0.556 0 0);
+	/* Neutral muted tint for the composer in dark mode — only the Send
+	 * button itself carries the yellow accent here, not the whole chat area. */
+	--composer-bg: oklch(0.269 0 0 / 30%);
+}
+
+/* "Default Colors" opt-out — when the user flips the toggle in Customization
+ * settings, <html> gets the .use-default-colors class. The block below
+ * restores the stock shadcn light-mode values; the second block restores
+ * the original dark-mode primary + composer values. Dark-mode background,
+ * card, sidebar, etc. weren't customized, so they don't appear here. */
+:root:not(.dark).use-default-colors {
+	--background: oklch(1 0 0);
+	--card: oklch(1 0 0);
+	--popover: oklch(1 0 0);
+	--primary: oklch(0.205 0 0);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.97 0 0);
+	--muted: oklch(0.97 0 0);
+	--accent: oklch(0.97 0 0);
+	--border: oklch(0.922 0 0);
+	--input: oklch(0.922 0 0);
+	--sidebar: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.97 0 0);
+	--sidebar-border: oklch(0.922 0 0);
+	--composer-bg: oklch(0.97 0 0 / 30%);
+}
+
+:root.dark.use-default-colors {
+	--primary: oklch(0.922 0 0);
+	--primary-foreground: oklch(0.205 0 0);
 }
 
 @theme inline {
@@ -140,6 +186,19 @@
 }
 .scrollbar-none::-webkit-scrollbar {
 	display: none;
+}
+
+/* Spinner used by the streaming "Generating" loader on code blocks (see
+ * markdown-renderer.svelte). Defined at the document root so Svelte's
+ * keyframe scoping and `-global-` quirks can't break the animation
+ * property reference inside a `:global()` rule. */
+@keyframes md-spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
 }
 
 /* Mobile-only: pin the chat layout to the dynamic viewport so the body

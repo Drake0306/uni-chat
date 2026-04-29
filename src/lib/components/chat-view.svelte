@@ -607,7 +607,7 @@
 						<span class="flex items-center gap-2 sm:gap-2.5">
 							<span>Press</span>
 							<kbd
-								class="press-enter-kbd inline-flex h-8 min-w-10 items-center justify-center rounded-md border border-border bg-muted px-2.5 text-sm font-semibold text-foreground sm:h-10 sm:min-w-12 sm:px-3 sm:text-base"
+								class="press-enter-kbd inline-flex h-8 min-w-10 items-center justify-center rounded-md border border-primary bg-primary px-2.5 text-sm font-semibold text-primary-foreground sm:h-10 sm:min-w-12 sm:px-3 sm:text-base"
 							>
 								Enter
 							</kbd>
@@ -644,8 +644,8 @@
 							<button
 								class="suggestion-pill flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-semibold transition-all
 									{isActive
-										? 'bg-accent text-foreground shadow-sm'
-										: 'text-muted-foreground hover:bg-accent hover:text-foreground hover:shadow-sm'}"
+										? 'bg-primary text-primary-foreground shadow-sm'
+										: 'text-muted-foreground hover:bg-primary/15 hover:text-foreground hover:shadow-sm'}"
 								onclick={() => activeCategory = category as Category}
 							>
 								{#if category === 'Explore'}
@@ -677,13 +677,13 @@
 			</div>
 		{:else}
 			<div class="mx-auto max-w-3xl space-y-6 px-4 pt-20 pb-8">
-				{#each messages as message}
+				{#each messages as message, idx}
 					{#if message.role === 'user'}
 						<div class="group flex flex-col items-end">
 							<div class="max-w-[85%] rounded-2xl bg-muted/60 px-4 py-2.5">
 								<p class="whitespace-pre-wrap text-base">{message.content}</p>
 							</div>
-							<div class="mt-2 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+							<div class="mt-2 flex items-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
 								<button
 									class="msg-action flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
 									onclick={() => copyMessage(message)}
@@ -699,7 +699,18 @@
 							</div>
 						</div>
 					{:else}
-						<div class="assistant-msg group -mx-3 rounded-xl px-3 py-2 transition-colors hover:bg-muted/40">
+						<!-- Read streaming state from the store, NOT local `loading`.
+						     The first message in a new chat triggers goto('/chat/<id>'),
+						     which unmounts this component instance; the fetch keeps
+						     running in the old instance and fills assistantMsg.content,
+						     but the new instance's local `loading` is false. The store
+						     value persists across the navigation so the indicator
+						     survives the remount. -->
+						{@const isStreamingMsg = chatStore.streaming && idx === messages.length - 1}
+						<div
+							class="assistant-msg group -mx-3 rounded-xl px-3 py-2 transition-colors hover:bg-muted/40"
+							class:streaming-active={isStreamingMsg}
+						>
 							{#if message.reasoning}
 								<ThinkingBlock reasoning={message.reasoning} isThinking={message.isThinking ?? false} />
 							{/if}
@@ -710,10 +721,25 @@
 									<span class="typing-dot size-1.5 rounded-full bg-muted-foreground/60" style="animation-delay: 0.3s"></span>
 								</div>
 							{:else}
-								<MarkdownRenderer content={message.content} />
+								<MarkdownRenderer
+									content={message.content}
+									streaming={isStreamingMsg}
+								/>
+							{/if}
+							<!-- Static Svelte-rendered streaming pill. Lives OUTSIDE the
+							     markdown {@html} block, so the throttled re-renders
+							     during streaming don't replace this element — the spin
+							     animation runs continuously instead of resetting every
+							     100ms. Visible only while the store reports streaming
+							     AND this is the in-flight (last) assistant message. -->
+							{#if isStreamingMsg}
+								<div class="mt-3 inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
+									<span class="streaming-spinner" aria-hidden="true"></span>
+									<span>Generating</span>
+								</div>
 							{/if}
 							{#if message.content}
-								<div class="mt-4 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+								<div class="mt-4 flex items-center gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
 									<button
 										class="msg-action flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
 										onclick={() => copyMessage(message)}
@@ -741,7 +767,7 @@
 
 	<!-- Composer -->
 	<div class="px-3 pb-4 sm:px-6 sm:pb-6">
-		<div class="mx-auto max-w-3xl rounded-2xl bg-muted/30 p-2 sm:p-3">
+		<div class="mx-auto max-w-3xl rounded-2xl p-2 sm:p-3" style="background-color: var(--composer-bg);">
 			<!-- Hidden file picker. Triggered by the "Attach" button below. -->
 			<input
 				type="file"
@@ -1061,6 +1087,20 @@
 </div>
 
 <style>
+	/* Streaming "Generating" spinner — uses the global `md-spin` keyframe
+	 * defined in app.css. Element is Svelte-managed, lives outside the
+	 * markdown {@html} block, so it isn't replaced on every chunk and the
+	 * animation runs continuously without resetting. */
+	.streaming-spinner {
+		display: inline-block;
+		width: 12px;
+		height: 12px;
+		border-radius: 9999px;
+		border: 2px solid currentColor;
+		border-top-color: transparent;
+		animation: md-spin 0.7s linear infinite;
+	}
+
 	.capability-toggle {
 		transform: scale(1);
 	}

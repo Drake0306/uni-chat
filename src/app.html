@@ -20,6 +20,18 @@
 		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 		<meta name="apple-mobile-web-app-title" content="Uni Chat" />
 
+		<!-- Apply the persisted "Default Colors" choice before any content
+		     paints, so light-mode users who opted out of the cream + yellow
+		     palette don't see a flash of the custom theme on refresh. The
+		     colors store does the same thing on import; this just runs first. -->
+		<script>
+			try {
+				if (localStorage.getItem('unichat_use_default_colors') === 'true') {
+					document.documentElement.classList.add('use-default-colors');
+				}
+			} catch (_) {}
+		</script>
+
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
