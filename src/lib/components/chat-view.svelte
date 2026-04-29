@@ -53,6 +53,7 @@
 	import { chatStore } from '$lib/stores/chats.svelte.js';
 	import { themeStore, type Theme } from '$lib/stores/theme.svelte.js';
 	import type { Message, TextAttachment, ImageAttachment, LLMContentBlock } from '$lib/types.js';
+	import { ThinkTagStripper } from '$lib/think-tag-stripper.js';
 
 	let { chatId }: { chatId?: string } = $props();
 
@@ -810,6 +811,11 @@
 
 			const decoder = new TextDecoder();
 			let buffer = '';
+			// Defensive parser for providers that inline chain-of-thought as
+			// `<think>…</think>` inside delta.content (e.g. Groq Qwen3-32B
+			// before reasoning_format=parsed kicks in, some OpenRouter
+			// upstreams). Splits content/reasoning on the fly across chunks.
+			const thinkStripper = new ThinkTagStripper();
 
 			while (true) {
 				const { done, value } = await reader.read();
@@ -839,15 +845,29 @@
 								(assistantMsg.reasoning ?? '') + reasoningChunk;
 							assistantMsg.isThinking = true;
 						}
-						if (delta?.content) {
-							assistantMsg.isThinking = false;
-							assistantMsg.content += delta.content;
+						if (typeof delta?.content === 'string' && delta.content.length > 0) {
+							const split = thinkStripper.process(delta.content);
+							if (split.reasoning) {
+								assistantMsg.reasoning =
+									(assistantMsg.reasoning ?? '') + split.reasoning;
+								assistantMsg.isThinking = true;
+							}
+							if (split.content) {
+								assistantMsg.isThinking = false;
+								assistantMsg.content += split.content;
+							}
 						}
 					} catch {
 						// Skip unparseable chunks
 					}
 				}
 			}
+
+			// Drain any held partial-tag buffer (handles streams that end
+			// mid-tag — rare but possible if a provider truncates).
+			const tail = thinkStripper.flush();
+			if (tail.reasoning) assistantMsg.reasoning = (assistantMsg.reasoning ?? '') + tail.reasoning;
+			if (tail.content) assistantMsg.content += tail.content;
 
 			assistantMsg.isThinking = false;
 			if (!assistantMsg.content) {

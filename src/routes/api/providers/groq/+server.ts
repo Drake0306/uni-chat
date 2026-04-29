@@ -31,6 +31,12 @@ export const POST: RequestHandler = async ({ request }) => {
 			// GPT-OSS family — pass our value through.
 			groqBody.reasoning_effort = body.effort;
 		}
+		// Force the reasoning into a separate `delta.reasoning` field.
+		// Without this, Groq's default for several reasoning models is
+		// 'raw' — which inlines `<think>…</think>` into delta.content,
+		// dumping chain-of-thought into the visible response. Setting
+		// 'parsed' tells Groq to split it for us.
+		groqBody.reasoning_format = 'parsed';
 	}
 
 	const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {

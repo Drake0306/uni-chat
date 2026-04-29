@@ -1,15 +1,22 @@
 import { getServiceClient } from './supabase.js';
+import { ThinkTagStripper } from '$lib/think-tag-stripper.js';
 
 /**
  * Parse raw SSE text and extract concatenated content and reasoning strings.
  * Expects OpenAI-compatible SSE format:
  *   data: {"choices":[{"delta":{"content":"..."}}]}
  *   data: {"choices":[{"delta":{"reasoning_content":"..."}}]}
+ *   data: {"choices":[{"delta":{"reasoning":"..."}}]}
  *   data: [DONE]
+ *
+ * Also strips inline `<think>…</think>` blocks from content (some providers
+ * inline chain-of-thought into delta.content) and routes them to reasoning,
+ * so the persisted column matches what the user saw in the UI.
  */
 export function parseSSE(raw: string): { content: string; reasoning: string } {
 	let content = '';
 	let reasoning = '';
+	const stripper = new ThinkTagStripper();
 
 	for (const line of raw.split('\n')) {
 		const trimmed = line.trim();
@@ -23,16 +30,26 @@ export function parseSSE(raw: string): { content: string; reasoning: string } {
 			const delta = json?.choices?.[0]?.delta;
 			if (!delta) continue;
 
-			if (typeof delta.content === 'string') {
-				content += delta.content;
-			}
+			// Accept all three field names different providers use.
 			if (typeof delta.reasoning_content === 'string') {
 				reasoning += delta.reasoning_content;
+			}
+			if (typeof delta.reasoning === 'string') {
+				reasoning += delta.reasoning;
+			}
+			if (typeof delta.content === 'string' && delta.content.length > 0) {
+				const split = stripper.process(delta.content);
+				content += split.content;
+				reasoning += split.reasoning;
 			}
 		} catch {
 			// Skip malformed JSON lines
 		}
 	}
+
+	const tail = stripper.flush();
+	content += tail.content;
+	reasoning += tail.reasoning;
 
 	return { content, reasoning };
 }
