@@ -4,6 +4,20 @@ A multi-model AI chat application that lets you talk to 20+ LLMs from a single i
 
 Live: https://uni-chat-sigma.vercel.app/
 
+## Screenshots
+
+| Home & prompt categories | Model picker (grouped by company) | Command palette (Cmd+K) |
+| :---: | :---: | :---: |
+| ![Home](docs/screenshots/01-home.png) | ![Model picker](docs/screenshots/02-model-picker.png) | ![Command palette](docs/screenshots/03-command-palette.png) |
+| **Vision chat with image attachments** | **Customization & traits** | **Models catalog** |
+| ![Vision chat](docs/screenshots/04-vision-chat.png) | ![Customization](docs/screenshots/05-customization.png) | ![Models catalog](docs/screenshots/06-models-catalog.png) |
+
+<p align="center">
+  <img src="docs/screenshots/07-model-details.png" alt="Model details with benchmark scores" width="640" />
+  <br />
+  <em>Model details — capability badges, knowledge cutoff, and Artificial Analysis benchmark scores per model.</em>
+</p>
+
 ## Who Is This For
 
 - **Developers** who want to compare model outputs without juggling 6 different chat UIs
